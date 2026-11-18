@@ -1,0 +1,15 @@
+.venv/
+.data/
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/
+native/bin/
+native/.build/
+*.log
+.DS_Store
+.env
+*.tsbuildinfo
+.ruff_cache/
+.env.*
+!.env.example
