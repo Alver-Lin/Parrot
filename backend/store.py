@@ -1,3 +1,5 @@
+import re
+import shutil
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -32,10 +34,13 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS segments_session ON segments(session_id, start);
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
+            if "markdown_content" not in columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN markdown_content TEXT")
             db.execute(
                 "UPDATE sessions SET status='interrupted', error=? "
-                "WHERE status IN ('preparing','recording','transcribing','stopping')",
-                ("服务已重启。已完成的文字和录音仍保留，可导出或重新导入录音。",),
+                "WHERE status IN ('preparing','recording','pausing','paused','resuming','transcribing','stopping')",
+                ("服务已重启。已完成的文字仍保留，可校对并导出。",),
             )
 
     @contextmanager
@@ -49,22 +54,21 @@ class Store:
         finally:
             db.close()
 
-    def create(self, settings, source: str):
+    def create(self, settings):
         sid = uuid.uuid4().hex
         with self.connect() as db:
             db.execute(
-                "INSERT INTO sessions(id,title,source,created_at,status,language,model,engine,vocabulary) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO sessions(id,title,source,created_at,status,language,model,engine) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (
                     sid,
                     settings.title,
-                    source,
+                    "system",
                     datetime.now(timezone.utc).isoformat(),
                     "preparing",
                     settings.language,
                     settings.model,
                     settings.engine,
-                    settings.vocabulary,
                 ),
             )
         (self.root / sid).mkdir()
@@ -86,28 +90,46 @@ class Store:
             if row is None:
                 return None
             result = dict(row)
+            result.pop("vocabulary", None)  # Retain the legacy database column for existing installations.
+            result["title"] = markdown_title(result.get("markdown_content")) or result["title"]
             result["segments"] = [
                 dict(s)
                 for s in db.execute("SELECT * FROM segments WHERE session_id=? ORDER BY start,id", (sid,))
             ]
             return result
 
+    def get_status(self, sid):
+        with self.connect() as db:
+            row = db.execute("SELECT status FROM sessions WHERE id=?", (sid,)).fetchone()
+            return row["status"] if row else None
+
     def list(self):
         with self.connect() as db:
-            return [
+            records = [
                 dict(row)
                 for row in db.execute(
                     "SELECT s.*, (SELECT COUNT(*) FROM segments WHERE session_id=s.id) AS segment_count "
                     "FROM sessions s ORDER BY created_at DESC"
                 )
             ]
+            for record in records:
+                record.pop("vocabulary", None)
+                record["title"] = markdown_title(record.get("markdown_content")) or record["title"]
+            return records
 
     def add_segments(self, sid, segments):
+        segments = list(segments)
         with self.connect() as db:
             db.executemany(
                 "INSERT INTO segments(session_id,start,end,text,original_text,review) VALUES(?,?,?,?,?,?)",
                 [(sid, s["start"], s["end"], s["text"], s["text"], int(s["review"])) for s in segments],
             )
+            added = "\n".join(filter(None, (segment_markdown(segment) for segment in segments)))
+            if added:
+                row = db.execute("SELECT markdown_content FROM sessions WHERE id=?", (sid,)).fetchone()
+                if row is not None and row["markdown_content"] is not None:
+                    db.execute("UPDATE sessions SET markdown_content=? WHERE id=?",
+                               (append_markdown(row["markdown_content"], added), sid))
 
     def edit(self, sid, segment_id, text):
         with self.connect() as db:
@@ -116,11 +138,51 @@ class Store:
                 (text, segment_id, sid),
             ).rowcount
 
-    def audio_path(self, sid):
-        # Only use database-backed IDs; never resolve a user-controlled filesystem path.
-        if len(sid) != 32 or any(c not in "0123456789abcdef" for c in sid):
-            raise ValueError("Invalid session ID")
-        return self.root / sid / "audio.wav"
+    def save_markdown(self, sid, content, base_content=None):
+        with self.connect() as db:
+            row = db.execute("SELECT markdown_content FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row is None:
+                return 0
+            if base_content is not None:
+                current = row["markdown_content"]
+                baseline = base_content
+                if current is None:
+                    # Generated metadata can change while a first edit is in progress.
+                    marker = "## 转写原文\n\n"
+                    current = markdown(self.get(sid)).split(marker, 1)[-1]
+                    baseline = baseline.split(marker, 1)[-1]
+                if not current.startswith(baseline):
+                    raise ValueError("文稿已被修改，请保留草稿并重新打开记录后再保存。")
+                content = append_markdown(content, current[len(baseline):])
+            return db.execute(
+                "UPDATE sessions SET markdown_content=?,title=COALESCE(?,title) WHERE id=?",
+                (content, markdown_title(content), sid),
+            ).rowcount
+
+    def delete(self, sid):
+        with self.connect() as db:
+            if db.execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone() is None:
+                return False
+            db.execute("DELETE FROM segments WHERE session_id=?", (sid,))
+            db.execute("DELETE FROM sessions WHERE id=?", (sid,))
+        directory = self.root / sid
+        if directory.exists():
+            shutil.rmtree(directory, ignore_errors=True)
+        return True
+
+
+def markdown_title(content):
+    """Use the document's opening H1 as its name; leave unnamed drafts unchanged."""
+    for line in (content or "").splitlines():
+        if not line.strip():
+            continue
+        heading = re.fullmatch(r" {0,3}#[ \t]+(.+)", line)
+        if heading:
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[1]).strip()
+            if title and title.strip("#"):
+                return title[:120]
+        break
+    return None
 
 
 def timestamp(seconds):
@@ -128,7 +190,22 @@ def timestamp(seconds):
     return f"{seconds // 3600:02}:{seconds // 60 % 60:02}:{seconds % 60:02}"
 
 
+def append_markdown(content, added):
+    if not added:
+        return content
+    separator = "" if not content or content.endswith("\n") or added.startswith("\n") else "\n"
+    return content + separator + added
+
+
+def segment_markdown(segment):
+    text = "\n".join(line.strip() for line in segment["text"].replace("\r\n", "\n")
+                     .replace("\r", "\n").split("\n") if line.strip())
+    return ("（待校对）" if segment["review"] else "") + text if text else ""
+
+
 def markdown(session):
+    if session.get("markdown_content") is not None:
+        return session["markdown_content"]
     title = session["title"].replace("\n", " ").replace("\r", " ")
     lines = [
         f"# {title}",
@@ -141,6 +218,7 @@ def markdown(session):
         "",
     ]
     for segment in session["segments"]:
-        review = "（待校对）" if segment["review"] else ""
-        lines += [f"### {timestamp(segment['start'])}{review}", "", segment["text"], ""]
+        text = segment_markdown(segment)
+        if text:
+            lines.append(text)
     return "\n".join(lines)

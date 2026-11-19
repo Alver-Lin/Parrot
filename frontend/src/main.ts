@@ -2,7 +2,7 @@ import { createApp } from "vue";
 import {
   Alert,
   Button,
-  Checkbox,
+  Switch,
   Collapse,
   ConfigProvider,
   Form,
@@ -12,6 +12,7 @@ import {
   Spin,
   Tabs,
   Tag,
+  Tooltip,
 } from "ant-design-vue";
 import "ant-design-vue/dist/reset.css";
 import App from "./App.vue";
@@ -21,7 +22,7 @@ const app = createApp(App);
 for (const component of [
   Alert,
   Button,
-  Checkbox,
+  Switch,
   Collapse,
   ConfigProvider,
   Form,
@@ -31,6 +32,7 @@ for (const component of [
   Spin,
   Tabs,
   Tag,
+  Tooltip,
 ]) {
   app.use(component);
 }

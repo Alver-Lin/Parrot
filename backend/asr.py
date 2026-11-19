@@ -1,6 +1,7 @@
 import importlib.util
 import math
 import wave
+from pathlib import Path
 
 import numpy as np
 
@@ -11,6 +12,49 @@ MLX_MODELS = {
     "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
     "small": "mlx-community/whisper-small-mlx",
 }
+FASTER_WHISPER_MODELS = {
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    "small": "Systran/faster-whisper-small",
+}
+
+
+def cached_model_path(engine, model):
+    """Inspect complete local snapshots without downloading or loading weights."""
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    repositories = MLX_MODELS if engine == "mlx" else FASTER_WHISPER_MODELS
+    try:
+        path = Path(snapshot_download(
+            repositories[model], local_files_only=True,
+            **({"cache_dir": str(DATA / "models" / "faster-whisper")} if engine != "mlx" else {}),
+        ))
+        required = ["config.json"]
+        if engine == "mlx":
+            weights = ["weights.safetensors", "weights.npz"]
+        else:
+            required += ["tokenizer.json"]
+            weights = ["model.bin"]
+            if not any((path / name).is_file() and (path / name).stat().st_size > 0
+                       for name in ("vocabulary.json", "vocabulary.txt")):
+                return None
+        if (all((path / name).is_file() and (path / name).stat().st_size > 0 for name in required)
+                and any((path / name).is_file() and (path / name).stat().st_size > 0 for name in weights)):
+            return str(path)
+    except (LocalEntryNotFoundError, OSError):
+        pass
+    return None
+
+
+def cached_models():
+    return {
+        "auto_engine": Recognizer.resolve_engine("auto"),
+        "downloaded": {
+            engine: {model: cached_model_path(engine, model) is not None for model in MLX_MODELS}
+            for engine in ("mlx", "faster-whisper")
+        },
+    }
 
 
 class Recognizer:
@@ -19,9 +63,11 @@ class Recognizer:
     def __init__(self):
         self.model = None
         self.key = None
-        self.state = {"status": "idle", "message": "首次使用需下载识别模型", "engine": None, "model": None}
+        self.model_path = None
+        self.state = {"status": "idle", "message": "开始转写时自动准备识别模型", "engine": None, "model": None}
 
-    def resolve_engine(self, requested):
+    @staticmethod
+    def resolve_engine(requested):
         if requested == "auto":
             return "mlx" if APPLE_SILICON and importlib.util.find_spec("mlx_whisper") else "faster-whisper"
         if requested == "mlx" and not APPLE_SILICON:
@@ -35,21 +81,23 @@ class Recognizer:
             return engine
         self.state = {
             "status": "loading",
-            "message": "正在加载模型；首次使用会下载模型，请查看后端终端进度。",
+            "message": "正在准备识别模型，请稍等片刻。",
             "engine": engine,
             "model": settings.model,
         }
         try:
+            self.model_path = cached_model_path(engine, settings.model)
             if engine == "mlx":
                 import mlx.core as mx
                 from mlx_whisper.transcribe import ModelHolder
 
-                self.model = ModelHolder.get_model(MLX_MODELS[settings.model], mx.float16)
+                self.model_path = self.model_path or MLX_MODELS[settings.model]
+                self.model = ModelHolder.get_model(self.model_path, mx.float16)
             else:
                 from faster_whisper import WhisperModel
 
                 self.model = WhisperModel(
-                    settings.model,
+                    self.model_path or settings.model,
                     device="cpu",
                     compute_type="int8",
                     download_root=str(DATA / "models" / "faster-whisper"),
@@ -92,8 +140,6 @@ class Recognizer:
             if settings.language != "en"
             else "A lecture transcript with punctuation."
         )
-        if settings.vocabulary.strip():
-            prompt += " 专业术语 / vocabulary: " + settings.vocabulary.strip()
         options = dict(
             language=None if settings.language == "auto" else settings.language,
             initial_prompt=prompt,
@@ -106,7 +152,7 @@ class Recognizer:
             import mlx_whisper
 
             result = mlx_whisper.transcribe(
-                samples, path_or_hf_repo=MLX_MODELS[settings.model], verbose=None, **options
+                samples, path_or_hf_repo=self.model_path, verbose=None, **options
             )
             segments = result["segments"]
         else:

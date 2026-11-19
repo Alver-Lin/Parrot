@@ -1,9 +1,10 @@
+import { desktopHeaders } from "./desktop";
+
 export interface Settings {
   title: string;
   language: "auto" | "zh" | "en";
   model: "large-v3" | "large-v3-turbo" | "small";
   engine: "auto" | "mlx" | "faster-whisper";
-  vocabulary: string;
 }
 
 export interface Segment {
@@ -25,9 +26,14 @@ export interface Session extends Settings {
   error: string | null;
   segments?: Segment[];
   segment_count?: number;
+  markdown_content?: string | null;
 }
 
 export interface Status {
+  model_cache: {
+    auto_engine: "mlx" | "faster-whisper";
+    downloaded: Record<string, Record<string, boolean>>;
+  };
   model: {
     status: string;
     message: string;
@@ -35,6 +41,7 @@ export interface Status {
     model: string | null;
   };
   active_id: string | null;
+  active_status: string | null;
   level: number;
   platform: string;
   apple_silicon: boolean;
@@ -47,10 +54,11 @@ export async function api<T>(
 ): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...options,
-    headers:
-      options.body instanceof FormData
-        ? options.headers
-        : { "Content-Type": "application/json", ...options.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...desktopHeaders(),
+      ...options.headers,
+    },
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
@@ -74,6 +82,7 @@ export function time(seconds = 0) {
 }
 
 export function toMarkdown(session: Session) {
+  if (session.markdown_content != null) return session.markdown_content;
   const lines = [
     `# ${session.title.replace(/[\r\n]/g, " ")}`,
     "",
@@ -85,12 +94,15 @@ export function toMarkdown(session: Session) {
     "",
   ];
   for (const segment of session.segments ?? []) {
-    lines.push(
-      `### ${time(segment.start)}${segment.review ? "（待校对）" : ""}`,
-      "",
-      segment.text,
-      "",
-    );
+    const text = segment.text
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n");
+    if (text) {
+      lines.push(`${segment.review ? "（待校对）" : ""}${text}`);
+    }
   }
   return lines.join("\n");
 }

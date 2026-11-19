@@ -81,13 +81,18 @@ struct ParrotCapture {
             try await stream.startCapture()
             diagnostic("READY")
             // The parent sends SIGTERM to stop capture. Exit closes the pipe;
-            // Python drains and finalizes both recording and final ASR chunk.
+            // Python drains the pipe and transcribes the final partial audio chunk.
             while true {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
                 _ = stream
             }
         } catch {
-            diagnostic("无法采集系统音频：\(error.localizedDescription)。请在「系统设置 → 隐私与安全性 → 屏幕与系统音频录制」中允许启动程序的终端或应用，重启后再试。")
+            let failure = error as NSError
+            if failure.domain == SCStreamErrorDomain && failure.code == SCStreamError.Code.userDeclined.rawValue {
+                diagnostic("系统声音权限未生效。请在「系统设置 → 隐私与安全性 → 屏幕与系统音频录制」中允许 Parrot，并从菜单栏退出后重新打开。若开关已开启，请删除旧的 Parrot 条目，再添加当前 Parrot.app 并授权。")
+            } else {
+                diagnostic("无法采集系统音频：\(error.localizedDescription) [\(failure.domain):\(failure.code)]")
+            }
             exit(1)
         }
     }

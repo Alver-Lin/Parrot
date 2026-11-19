@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
-import { message, theme } from "ant-design-vue";
+import { Modal, message, theme } from "ant-design-vue";
 import zhCN from "ant-design-vue/es/locale/zh_CN";
 import {
   AudioOutlined,
@@ -10,6 +10,7 @@ import {
   CloudDownloadOutlined,
   CodeOutlined,
   CopyOutlined,
+  DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
@@ -17,10 +18,12 @@ import {
   InfoCircleOutlined,
   LoadingOutlined,
   PlusOutlined,
-  SafetyCertificateOutlined,
+  PauseOutlined,
+  CaretRightOutlined,
   SoundOutlined,
-  StopOutlined,
-  UploadOutlined,
+  SettingOutlined,
+  HistoryOutlined,
+  CloseOutlined,
 } from "@ant-design/icons-vue";
 import {
   api,
@@ -31,33 +34,59 @@ import {
   type Status,
 } from "./api";
 
+import {
+  collapsePanel,
+  ensureCapturePermission,
+  openCaptureSettings,
+  copyText,
+  inDesktop,
+  saveMarkdown,
+  loadAutoScroll,
+  saveAutoScroll,
+  updateOrb,
+} from "./desktop";
+
+const settingsOpen = ref(false);
+const historyOpen = ref(false);
+const exporting = ref(false);
+const isDesktop = inDesktop();
+const headerTooltipProps = {
+  placement: "bottom" as const,
+  arrow: false,
+  color: "#fff",
+  overlayClassName: "header-action-tooltip",
+  mouseEnterDelay: 0.35,
+  mouseLeaveDelay: 0,
+  destroyTooltipOnHide: true,
+};
+
 const settings = reactive<Settings>({
   title: "",
   language: "zh",
   model: "large-v3",
   engine: "auto",
-  vocabulary: "",
 });
 const status = ref<Status | null>(null);
 const sessions = ref<Session[]>([]);
 const selected = ref<Session | null>(null);
 const tab = ref("transcript");
 const pending = ref(false);
+const pausePending = ref(false);
 const connected = ref(false);
 const initialLoading = ref(true);
 const networkError = ref("");
 const helpOpen = ref(false);
-const fileInput = ref<HTMLInputElement>();
-const player = ref<HTMLAudioElement>();
+const capturePermissionDenied = ref(false);
 const transcript = ref<HTMLElement>();
 const autoScroll = ref(true);
+const autoScrollLoading = ref(true);
 const editingId = ref<number | null>(null);
 const editText = ref("");
 const savePending = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 let selectionRevision = 0;
-const activeStates = ["preparing", "recording", "transcribing", "stopping"];
+const activeStates = ["preparing", "recording", "pausing", "paused", "resuming", "stopping"];
 const busy = computed(() => !!status.value?.active_id || pending.value);
 const modelLoading = computed(() => status.value?.model.status === "loading");
 const currentActive = computed(
@@ -68,14 +97,82 @@ const reviewCount = computed(
   () => segments.value.filter((segment) => segment.review).length,
 );
 const characterCount = computed(() =>
-  segments.value.reduce(
+  tab.value === "markdown" ? markdown.value.replace(/\s/g, "").length : segments.value.reduce(
     (sum, segment) => sum + segment.text.replace(/\s/g, "").length,
     0,
   ),
 );
-const markdown = computed(() =>
-  selected.value ? toMarkdown(selected.value) : "",
-);
+const markdownDrafts = reactive<Record<string, {
+  text: string;
+  saved: string;
+  saving: boolean;
+  error: boolean;
+}>>({});
+const markdownTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const markdownSaves = new Map<string, Promise<void>>();
+const markdownDraft = computed(() => selected.value ? markdownDrafts[selected.value.id] : undefined);
+const markdown = computed({
+  get: () => markdownDraft.value?.text ?? (selected.value ? toMarkdown(selected.value) : ""),
+  set: (text: string) => {
+    if (!selected.value) return;
+    const id = selected.value.id;
+    const draft = markdownDrafts[id] ??= {
+      text: toMarkdown(selected.value), saved: toMarkdown(selected.value), saving: false, error: false,
+    };
+    draft.text = text;
+    draft.error = false;
+    clearTimeout(markdownTimers.get(id));
+    markdownTimers.set(id, setTimeout(() => void saveMarkdownDraft(id), 600));
+  },
+});
+const markdownSaveLabel = computed(() => {
+  const draft = markdownDraft.value;
+  if (draft?.error) return "保存失败，点击重试";
+  if (draft?.saving) return "正在保存…";
+  if (draft && draft.text !== draft.saved) return "待保存";
+  return draft || selected.value?.markdown_content != null ? "已保存" : "可直接编辑";
+});
+
+function saveMarkdownDraft(id = selected.value?.id): Promise<void> {
+  if (!id) return Promise.resolve();
+  clearTimeout(markdownTimers.get(id));
+  markdownTimers.delete(id);
+  const draft = markdownDrafts[id];
+  if (!draft) return Promise.resolve();
+  const existing = markdownSaves.get(id);
+  if (existing) return existing;
+  if (draft.text === draft.saved) return Promise.resolve();
+  const saving = (async () => {
+    draft.saving = true;
+    draft.error = false;
+    try {
+      // Serialize writes and save any edits made while the previous request ran.
+      while (draft.text !== draft.saved) {
+        const content = draft.text;
+        const result = await api<{ title: string; content: string }>(`/sessions/${id}/markdown`, {
+          method: "PATCH", body: JSON.stringify({ content, base_content: draft.saved }),
+        });
+        const added = result.content.slice(content.length);
+        draft.text += added;
+        draft.saved = result.content;
+        if (selected.value?.id === id) {
+          selected.value.markdown_content = result.content;
+          selected.value.title = result.title;
+        }
+        const session = sessions.value.find((item) => item.id === id);
+        if (session) session.title = result.title;
+      }
+    } catch (error) {
+      draft.error = true;
+      showError(error);
+    } finally {
+      draft.saving = false;
+      markdownSaves.delete(id);
+    }
+  })();
+  markdownSaves.set(id, saving);
+  return saving;
+}
 const lag = computed(() =>
   Math.max(
     0,
@@ -85,7 +182,9 @@ const lag = computed(() =>
 const statusNames: Record<string, string> = {
   preparing: "准备中",
   recording: "正在聆听",
-  transcribing: "正在转写",
+  pausing: "正在暂停",
+  paused: "已暂停",
+  resuming: "正在继续",
   stopping: "完成剩余转写",
   completed: "已完成",
   failed: "转写失败",
@@ -101,15 +200,16 @@ const languageOptions = [
   { value: "en", label: "英语" },
   { value: "auto", label: "自动检测语言" },
 ];
-const modelLabel = computed(() =>
-  status.value?.model.status === "ready"
-    ? "模型已就绪"
-    : modelLoading.value
-      ? "模型加载中"
-      : status.value?.model.status === "error"
-        ? "模型加载失败"
-        : "模型尚未加载",
-);
+const selectedEngine = computed(() => settings.engine === "auto"
+  ? status.value?.model_cache.auto_engine : settings.engine);
+const selectedModelDownloaded = computed(() => !!selectedEngine.value &&
+  !!status.value?.model_cache.downloaded[selectedEngine.value]?.[settings.model]);
+const selectedModelMatches = computed(() => status.value?.model.model === settings.model &&
+  status.value?.model.engine === selectedEngine.value);
+const modelLabel = computed(() => selectedModelDownloaded.value ? "模型已下载"
+  : selectedModelMatches.value && modelLoading.value ? "模型下载中"
+    : selectedModelMatches.value && status.value?.model.status === "error"
+      ? "模型下载失败" : "模型尚未下载");
 
 function dateLabel(value: string) {
   return new Date(value).toLocaleString("zh-CN", {
@@ -130,6 +230,8 @@ async function refresh() {
     status.value = health;
     sessions.value = history;
     connected.value = true;
+    updateOrb(!!health.active_id, health.level, true,
+      ["pausing", "paused", "resuming"].includes(health.active_status ?? ""));
     networkError.value = "";
     if (!selected.value && health.active_id)
       await selectSession(health.active_id);
@@ -140,6 +242,10 @@ async function refresh() {
       const detail = await api<Session>(`/sessions/${id}`);
       if (selected.value?.id === id && revision === selectionRevision) {
         selected.value = detail;
+        const draft = markdownDrafts[id];
+        if (draft && !draft.saving && draft.text === draft.saved) {
+          draft.text = draft.saved = toMarkdown(detail);
+        }
         if (
           autoScroll.value &&
           before !== detail.segments?.length &&
@@ -152,6 +258,7 @@ async function refresh() {
     }
   } catch (error) {
     connected.value = false;
+    updateOrb(false, 0, false);
     networkError.value =
       error instanceof Error ? error.message : "无法连接后端";
   } finally {
@@ -168,7 +275,7 @@ async function selectSession(id: string) {
     selected.value = detail;
     editingId.value = null;
     tab.value = "transcript";
-    autoScroll.value = true;
+    historyOpen.value = false;
   } catch (error) {
     showError(error);
   }
@@ -182,16 +289,53 @@ function newSession() {
   ++selectionRevision;
   selected.value = null;
   editingId.value = null;
-  settings.title = "";
+  historyOpen.value = false;
   tab.value = "transcript";
+}
+
+function canDeleteSession(item: Session) {
+  return !activeStates.includes(item.status) && status.value?.active_id !== item.id;
+}
+
+function removeSession(item: Session, event: Event) {
+  event.stopPropagation();
+  event.preventDefault();
+  if (!canDeleteSession(item)) {
+    message.error("请先停止当前聆听，再删除这条记录");
+    return;
+  }
+  Modal.confirm({
+    title: "删除学习记录",
+    content: `确定删除「${item.title}」？删除后无法恢复。`,
+    okText: "删除",
+    okType: "danger",
+    cancelText: "取消",
+    centered: true,
+    async onOk() {
+      try {
+        await api(`/sessions/${item.id}`, { method: "DELETE" });
+        clearTimeout(markdownTimers.get(item.id));
+        markdownTimers.delete(item.id);
+        delete markdownDrafts[item.id];
+        sessions.value = sessions.value.filter((session) => session.id !== item.id);
+        if (selected.value?.id === item.id) {
+          ++selectionRevision;
+          selected.value = null;
+          editingId.value = null;
+        }
+        message.success("已删除");
+      } catch (error) {
+        showError(error);
+        throw error;
+      }
+    },
+  });
 }
 
 function options(): Settings {
   return {
     ...settings,
-    title:
-      settings.title.trim() ||
-      `学习记录 ${new Date().toLocaleDateString("zh-CN")}`,
+    title: `学习记录 ${new Date().toLocaleDateString("zh-CN")}`,
   };
 }
 
@@ -200,16 +344,34 @@ function showError(error: unknown) {
 }
 
 async function start() {
+  if (pending.value || busy.value) return;
+  const session = selected.value;
+  const revision = selectionRevision;
   pending.value = true;
   try {
-    selected.value = await api<Session>("/sessions", {
+    if (!(await ensureCapturePermission())) {
+      capturePermissionDenied.value = true;
+      return;
+    }
+    capturePermissionDenied.value = false;
+    if (selectionRevision !== revision) return;
+    if (session) {
+      await saveMarkdownDraft(session.id);
+      if (markdownDrafts[session.id]?.error || selectionRevision !== revision) return;
+    }
+    const detail = await api<Session>(session ? `/sessions/${session.id}/continue` : "/sessions", {
       method: "POST",
-      body: JSON.stringify(options()),
+      ...(session ? {} : { body: JSON.stringify(options()) }),
     });
-    ++selectionRevision;
-    status.value!.active_id = selected.value.id;
-    tab.value = "transcript";
-    editingId.value = null;
+    if (status.value) status.value.active_id = detail.id;
+    if (selectionRevision === revision) {
+      selected.value = detail;
+      ++selectionRevision;
+      tab.value = "transcript";
+      editingId.value = null;
+      await nextTick();
+      if (autoScroll.value) scrollToLatest();
+    }
   } catch (error) {
     showError(error);
   } finally {
@@ -223,7 +385,9 @@ async function stop() {
   try {
     const detail = await api<Session>(
       `/sessions/${status.value.active_id}/stop`,
-      { method: "POST" },
+      {
+        method: "POST",
+      },
     );
     if (selected.value?.id === detail.id) selected.value = detail;
     message.info("已停止采集，正在保存并转写剩余音频");
@@ -234,39 +398,24 @@ async function stop() {
   }
 }
 
-async function upload(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  if (file.size > 2 * 1024 ** 3) {
-    message.error("文件不能超过 2GB");
-    input.value = "";
-    return;
-  }
-  pending.value = true;
-  const body = new FormData();
-  body.append("file", file);
-  body.append(
-    "settings",
-    JSON.stringify({
-      ...options(),
-      title: settings.title.trim() || file.name.replace(/\.[^.]+$/, ""),
-    }),
-  );
+async function togglePause() {
+  if (!selected.value || pausePending.value) return;
+  const sid = selected.value.id;
+  const revision = selectionRevision;
+  const action = selected.value.status === "paused" ? "resume" : "pause";
+  pausePending.value = true;
   try {
-    selected.value = await api<Session>("/sessions/upload", {
-      method: "POST",
-      body,
-    });
-    ++selectionRevision;
-    status.value!.active_id = selected.value.id;
-    tab.value = "transcript";
-    editingId.value = null;
+    const detail = await api<Session>(`/sessions/${sid}/${action}`, { method: "POST" });
+    if (status.value?.active_id === sid) {
+      status.value.active_status = detail.status;
+      updateOrb(true, status.value.level, connected.value,
+        ["pausing", "paused", "resuming"].includes(detail.status));
+    }
+    if (selected.value?.id === sid && selectionRevision === revision) selected.value = detail;
   } catch (error) {
     showError(error);
   } finally {
-    pending.value = false;
-    input.value = "";
+    pausePending.value = false;
   }
 }
 
@@ -277,7 +426,7 @@ async function prepareModel() {
       method: "POST",
       body: JSON.stringify(options()),
     });
-    message.info("开始加载模型，首次下载请保持网络连接");
+    message.info("开始下载模型，请保持网络连接");
   } catch (error) {
     showError(error);
   } finally {
@@ -312,16 +461,6 @@ async function saveEdit() {
   }
 }
 
-async function seek(seconds: number) {
-  if (!player.value || currentActive.value) return;
-  player.value.currentTime = seconds;
-  try {
-    await player.value.play();
-  } catch {
-    message.info("请点击播放器开始回听");
-  }
-}
-
 function scrollToLatest() {
   transcript.value?.scrollTo({
     top: transcript.value.scrollHeight,
@@ -331,17 +470,64 @@ function scrollToLatest() {
 
 async function copyMarkdown() {
   try {
-    await navigator.clipboard.writeText(markdown.value);
+    await copyText(markdown.value);
     message.success("Markdown 已复制");
   } catch {
     message.error("复制失败，请使用导出 Markdown");
   }
 }
 
-onMounted(refresh);
+async function exportMarkdown() {
+  if (!selected.value) return;
+  exporting.value = true;
+  try {
+    const result = await saveMarkdown(
+      selected.value.id,
+      selected.value.title,
+      markdown.value,
+    );
+    if (result.saved) message.success("Markdown 已导出");
+  } catch (error) {
+    showError(error);
+  } finally {
+    exporting.value = false;
+  }
+}
+
+function openSettings() {
+  settingsOpen.value = true;
+}
+
+async function changeAutoScroll(value: boolean | string | number) {
+  const previous = autoScroll.value;
+  autoScroll.value = Boolean(value);
+  autoScrollLoading.value = true;
+  try {
+    await saveAutoScroll(autoScroll.value);
+  } catch (error) {
+    autoScroll.value = previous;
+    showError(error);
+  } finally {
+    autoScrollLoading.value = false;
+  }
+}
+
+onMounted(async () => {
+  window.addEventListener("parrot-open-settings", openSettings);
+  void refresh();
+  try {
+    autoScroll.value = await loadAutoScroll();
+  } catch (error) {
+    showError(error);
+  } finally {
+    autoScrollLoading.value = false;
+  }
+});
 onUnmounted(() => {
+  window.removeEventListener("parrot-open-settings", openSettings);
   disposed = true;
   clearTimeout(timer);
+  for (const id of markdownTimers.keys()) void saveMarkdownDraft(id);
 });
 </script>
 
@@ -352,543 +538,464 @@ onUnmounted(() => {
       algorithm: theme.defaultAlgorithm,
       token: {
         colorPrimary: '#4263eb',
-        borderRadius: 9,
+        borderRadius: 10,
         fontFamily:
-          'Inter, -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif',
-        colorText: '#243047',
-        colorBorder: '#e5e9f0',
+          '-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif',
+        colorText: '#27344c',
+        colorBorder: '#e7ebf3',
         controlHeight: 38,
       },
     }"
   >
-    <div class="app-shell">
-      <aside class="sidebar">
-        <a class="brand" href="/" @click.prevent="newSession"
-          ><span class="brand-icon"><i></i><i></i><i></i><i></i></span
-          ><span>Parrot<span class="brand-dot">.</span></span></a
-        >
-        <div class="sidebar-caption">让知识留下来</div>
-        <a-button type="primary" block class="new-button" @click="newSession"
-          ><PlusOutlined /> 新建学习记录</a-button
-        >
-        <div class="sidebar-section">
-          <span>学习记录</span><span class="count">{{ sessions.length }}</span>
+    <div class="desktop-workspace" data-testid="desktop-workspace">
+      <header class="panel-header">
+        <div class="panel-brand">
+          <span class="brand-mark">
+            <svg class="parrot-logo" viewBox="0 0 32 32" role="img" aria-label="Parrot 鹦鹉图标">
+              <path fill="#fff" d="M11.6 23.6C8.5 22.1 6.8 19.2 6.8 15.8c0-3.1 1.5-5.4 2.6-7C9.8 5.5 12.4 3.5 16 3.5c3.9 0 6.6 2.5 6.6 6.2v6.1c0 4.3-2.2 7-5.8 8.2l.7 5-3.6-2.7-3.6 2.7z" />
+              <path fill="#ffc85b" d="M22 9.3c4.1 0 6 1.9 6 4.7 0 2.3-1.6 4-3.9 4.4.9-1.9 1-3.5-.6-4.4l-2.1-.8z" />
+              <path d="M10 14.3c-1.3 3.6 1.3 7.3 5.9 7.7 2.6-1.3 3.8-3.3 3.5-5.7M11.4 16.2c.8 1.6 2.1 2.6 3.9 3" fill="none" stroke="#4263eb" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="18.6" cy="8.7" r="1.15" fill="#263564" />
+            </svg>
+          </span
+          ><strong>Parrot<span>.</span></strong>
         </div>
-        <div class="session-list">
-          <a-spin v-if="initialLoading" class="sidebar-spinner" />
-          <div v-else-if="!sessions.length" class="history-empty">
-            <FolderOpenOutlined />
-            <p>还没有学习记录</p>
-            <span>从一次聆听开始吧</span>
-          </div>
-          <button
-            v-for="item in sessions"
-            :key="item.id"
-            class="session-item"
-            :class="{ selected: selected?.id === item.id }"
-            @click="selectSession(item.id)"
-          >
-            <span class="session-icon"><FileTextOutlined /></span>
-            <span class="session-info"
-              ><strong>{{ item.title }}</strong
-              ><small
-                >{{ dateLabel(item.created_at) }}<span>·</span
-                >{{ time(item.duration) }}</small
-              ></span
-            >
-            <span
-              v-if="activeStates.includes(item.status)"
-              class="live-dot"
-            ></span>
-          </button>
+        <div class="header-actions">
+          <a-tooltip v-bind="headerTooltipProps" title="新建学习记录"
+            ><a-button type="text" aria-label="新建学习记录" @click="newSession"
+              ><template #icon><PlusOutlined /></template></a-button
+          ></a-tooltip>
+          <a-tooltip v-bind="headerTooltipProps" title="历史记录"
+            ><a-button
+              type="text"
+              aria-label="历史记录"
+              @click="historyOpen = true"
+              ><template #icon><HistoryOutlined /></template></a-button
+          ></a-tooltip>
+          <a-tooltip v-bind="headerTooltipProps" title="识别设置"
+            ><a-button
+              type="text"
+              aria-label="识别设置"
+              @click="settingsOpen = true"
+              ><template #icon><SettingOutlined /></template></a-button
+          ></a-tooltip>
+          <a-tooltip v-bind="headerTooltipProps" v-if="isDesktop" title="收起到悬浮球，转写继续"
+            ><a-button
+              type="text"
+              aria-label="收起转写面板"
+              @click="collapsePanel"
+              ><template #icon><CloseOutlined /></template></a-button
+          ></a-tooltip>
         </div>
-        <div class="local-note">
-          <SafetyCertificateOutlined />
-          <div>
-            <strong>在你的电脑上处理</strong><span>录音与笔记保存在本地</span>
-          </div>
-        </div>
-        <button class="sidebar-help" @click="helpOpen = true">
-          <InfoCircleOutlined /> 使用指南 <ArrowRightOutlined />
-        </button>
-      </aside>
+      </header>
 
-      <div class="main-shell">
-        <header class="topbar">
-          <div>
-            <span class="breadcrumb">工作空间</span><span class="slash">/</span
-            ><span>{{ selected ? "学习记录" : "新建记录" }}</span>
+      <a-alert
+        v-if="networkError"
+        class="notice"
+        type="error"
+        show-icon
+        message="语音服务暂未连接"
+        :description="
+          isDesktop
+            ? '正在尝试重新连接。持续失败时，请退出并重新启动 Parrot。'
+            : networkError
+        "
+      />
+      <a-alert
+        v-if="capturePermissionDenied"
+        class="notice"
+        type="warning"
+        show-icon
+        message="需要允许系统声音采集"
+        description="请在系统设置中允许 Parrot，然后从菜单栏退出并重新打开。若开关已开启，请删除旧的 Parrot 条目，重新添加当前应用并授权。"
+      >
+        <template #action>
+          <a-button size="small" @click="openCaptureSettings().catch(showError)">打开权限设置</a-button>
+        </template>
+      </a-alert>
+      <a-alert
+        v-if="selected?.error"
+        class="notice"
+        type="error"
+        show-icon
+        :message="statusNames[selected.status]"
+        :description="selected.error"
+      >
+        <template v-if="isDesktop && selected.error.includes('系统声音权限未生效')" #action>
+          <a-button size="small" @click="openCaptureSettings().catch(showError)">打开权限设置</a-button>
+        </template>
+      </a-alert>
+
+      <section class="document-panel">
+        <div class="document-header">
+          <a-tabs v-model:activeKey="tab"
+            ><a-tab-pane key="transcript"
+              ><template #tab
+                ><FileTextOutlined /> 转写内容
+                <span v-if="segments.length" class="tab-count">{{
+                  segments.length
+                }}</span></template
+              ></a-tab-pane
+            ><a-tab-pane key="markdown"
+              ><template #tab><CodeOutlined /> Markdown</template></a-tab-pane
+            ></a-tabs
+          ><a-button
+            type="text"
+            size="small"
+            :disabled="!segments.length"
+            :loading="exporting"
+            @click="exportMarkdown"
+            ><DownloadOutlined /> 导出</a-button
+          >
+        </div>
+
+        <div v-if="!segments.length" class="empty-document">
+          <div class="empty-illustration">
+            <FileTextOutlined /><span><SoundOutlined /></span>
           </div>
-          <div class="connection">
-            <span class="connection-dot" :class="{ online: connected }"></span
-            >{{ connected ? "本地服务已连接" : "正在连接本地服务"
-            }}<span class="local-badge">LOCAL</span>
-          </div>
-        </header>
-        <main>
-          <div class="page-heading">
-            <div>
-              <div class="eyebrow">LISTEN. CAPTURE. LEARN.</div>
-              <h1>{{ selected?.title || "听见，记下来。" }}</h1>
-              <p>
-                {{
-                  selected
-                    ? `${dateLabel(selected.created_at)} · ${selected.source === "system" ? "系统音频" : "导入文件"} · Whisper ${selected.model}`
-                    : "把视频里的每一个知识点，变成可以反复阅读的文字。"
-                }}
-              </p>
+          <h2>
+            {{
+              selected?.status === "paused"
+                ? "聆听已暂停"
+                : currentActive
+                ? selected?.status === "preparing"
+                  ? "正在准备好好聆听"
+                  : "声音，正在变成文字"
+                : "专心听懂，其余交给 Parrot"
+            }}
+          </h2>
+          <p v-if="currentActive">
+            {{
+              selected?.status === "paused"
+                ? "点击继续，接着当前记录转写；暂停期间不采集声音。"
+                : selected?.status === "preparing"
+                  ? "正在准备识别模型，请稍等片刻。"
+                  : "通常积累 8–24 秒音频后输出一批文字。"
+            }}
+          </p>
+          <span v-if="currentActive" class="working-label"
+            ><PauseOutlined v-if="selected?.status === 'paused'" /><LoadingOutlined v-else /> {{ statusNames[selected!.status] }}</span
+          >
+        </div>
+
+        <div
+          v-else-if="tab === 'transcript'"
+          ref="transcript"
+          class="transcript-scroll"
+        >
+          <article
+            v-for="segment in segments"
+            :key="segment.id"
+            class="transcript-segment"
+          >
+            <span class="timestamp">{{ time(segment.start) }}</span>
+            <div class="segment-content">
+              <template v-if="editingId === segment.id"
+                ><a-textarea
+                  v-model:value="editText"
+                  aria-label="校对转写文字"
+                  :auto-size="{ minRows: 2, maxRows: 8 }"
+                />
+                <div class="edit-actions">
+                  <a-button size="small" @click="editingId = null"
+                    >取消</a-button
+                  ><a-button
+                    type="primary"
+                    size="small"
+                    :loading="savePending"
+                    @click="saveEdit"
+                    ><CheckOutlined /> 保存</a-button
+                  >
+                </div></template
+              ><template v-else
+                ><p>{{ segment.text }}</p>
+                <span v-if="segment.review" class="review-label"
+                  >建议校对</span
+                ></template
+              >
             </div>
             <a-button
-              v-if="selected"
-              class="export-top"
-              :href="`/api/sessions/${selected.id}/markdown`"
-              :disabled="!segments.length"
-              ><DownloadOutlined /> 导出 Markdown</a-button
-            ><span v-else class="version-badge"
-              >学习工作台 <span>01</span></span
-            >
-          </div>
+              v-if="editingId !== segment.id"
+              type="text"
+              size="small"
+              class="edit-button"
+              aria-label="编辑这一段"
+              @click="
+                editingId = segment.id;
+                editText = segment.text;
+              "
+              ><EditOutlined
+            /></a-button>
+          </article>
+        </div>
 
+        <div v-else class="markdown-area">
+          <div class="markdown-toolbar">
+            <span>MARKDOWN · UTF-8</span>
+            <div class="markdown-actions">
+              <a-button type="text" size="small" :loading="markdownDraft?.saving"
+                :disabled="!markdownDraft || (!markdownDraft.error && markdownDraft.text === markdownDraft.saved)"
+                aria-label="保存 Markdown" @click="saveMarkdownDraft()"
+              >{{ markdownSaveLabel }}</a-button>
+              <a-button type="text" size="small" @click="copyMarkdown"
+              ><CopyOutlined /> 复制全文</a-button
+              >
+            </div>
+          </div>
+          <textarea v-model="markdown" class="markdown-editor" aria-label="编辑 Markdown"
+            spellcheck="false" @blur="saveMarkdownDraft()"
+            @keydown.meta.s.prevent="saveMarkdownDraft()"
+            @keydown.ctrl.s.prevent="saveMarkdownDraft()"
+          ></textarea>
+        </div>
+
+        <div class="capture-dock">
+          <div
+            class="capture-controls"
+            :class="{ 'is-recording': selected?.status === 'recording' }"
+            role="group"
+            aria-label="聆听控制"
+          >
+            <span class="record-time" :aria-label="`已聆听 ${time(selected?.duration)}`">{{
+              time(selected?.duration)
+            }}</span>
+            <Transition name="capture-pause">
+              <div v-if="currentActive && !(status?.active_id && selected?.id !== status.active_id)"
+                class="capture-pause-slot">
+                <a-tooltip :title="selected?.status === 'paused' ? '继续聆听' : '暂停聆听'">
+                  <a-button
+                    class="capture-action pause-action"
+                    shape="circle"
+                    :aria-label="selected?.status === 'paused' ? '继续聆听' : '暂停聆听'"
+                    :disabled="pending || !connected || !['recording', 'paused'].includes(selected?.status || '')"
+                    :loading="pausePending || ['pausing', 'resuming'].includes(selected?.status || '')"
+                    @click="togglePause"
+                  >
+                    <template #icon>
+                      <CaretRightOutlined v-if="selected?.status === 'paused'" />
+                      <PauseOutlined v-else />
+                    </template>
+                  </a-button>
+                </a-tooltip>
+              </div>
+            </Transition>
+            <a-tooltip
+              v-if="status?.active_id && selected?.id !== status.active_id"
+              title="返回正在进行的转写"
+            >
+              <a-button
+                class="capture-action"
+                type="primary"
+                shape="circle"
+                aria-label="返回转写"
+                @click="selectSession(status!.active_id!)"
+                ><template #icon><ArrowRightOutlined /></template></a-button
+              >
+            </a-tooltip>
+            <template v-else-if="currentActive">
+              <a-tooltip :title="selected?.status === 'stopping' ? '正在完成剩余转写' : '停止聆听'">
+              <a-button
+                class="capture-action"
+                type="primary"
+                shape="circle"
+                aria-label="停止聆听"
+                :disabled="pausePending || selected?.status === 'stopping'"
+                :loading="pending || selected?.status === 'stopping'"
+                @click="stop"
+                ><template #icon><span class="stop-glyph" aria-hidden="true"></span></template></a-button
+              >
+              </a-tooltip>
+            </template>
+            <a-tooltip v-else :title="selected ? '继续聆听，接着当前记录转写' : '开始聆听'">
+              <a-button
+                class="capture-action"
+                type="primary"
+                shape="circle"
+                :aria-label="selected ? '续写当前记录' : '开始聆听'"
+                :disabled="
+                  !connected || busy || modelLoading || !status?.capture_available
+                "
+                :loading="pending"
+                @click="start"
+                ><template #icon><AudioOutlined class="capture-start-symbol" /></template></a-button
+              >
+            </a-tooltip>
+            <div
+              class="audio-meter"
+              :style="{
+                '--meter-energy':
+                  selected?.status === 'recording'
+                    ? String(0.28 + Math.min(1, Math.max(0, status?.level || 0)) * 0.72)
+                    : '0',
+              }"
+              aria-hidden="true"
+            >
+              <i
+                v-for="(height, index) in [12, 22, 28]"
+                :key="index"
+                :style="{ height: `${height}px` }"
+              ></i>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <footer class="panel-footer">
+        <div class="footer-info">
+          <span v-if="characterCount" class="character-count">{{ characterCount.toLocaleString() }} 字符</span>
+          <span v-if="currentActive">待处理约 {{ time(lag) }}</span>
+          <span v-else-if="reviewCount" class="review-summary">{{ reviewCount }} 段待校对</span>
+        </div>
+        <div class="footer-actions">
+          <button @click="helpOpen = true">
+            <InfoCircleOutlined /> 使用指南
+          </button>
+        </div>
+      </footer>
+
+      <a-modal
+        v-model:open="historyOpen"
+        title="学习记录"
+        :footer="null"
+        width="480px"
+        wrap-class-name="client-modal"
+        ><div class="history-top">
+          <span>{{ sessions.length }} 条记录 · 保存在本地</span>
+        </div>
+        <a-spin v-if="initialLoading" />
+        <div v-else-if="!sessions.length" class="history-empty">
+          <FolderOpenOutlined />
+          <p>从一次聆听开始吧</p>
+        </div>
+        <div v-else class="history-list">
+          <div
+            v-for="item in sessions"
+            :key="item.id"
+            class="history-item session-item"
+            :class="{ selected: selected?.id === item.id }"
+            role="button"
+            tabindex="0"
+            @click="selectSession(item.id)"
+            @keydown.enter.prevent="selectSession(item.id)"
+          >
+            <span class="history-icon"><FileTextOutlined /></span
+            ><span
+              ><strong>{{ item.title }}</strong
+              ><small
+                >{{ dateLabel(item.created_at) }} · {{ time(item.duration) }} ·
+                {{ item.segment_count }} 段</small
+              ></span
+            ><a-tag
+              :color="item.status === 'completed' ? 'green' : item.status === 'failed' ? 'red' : activeStates.includes(item.status) ? 'blue' : 'default'"
+              >{{ statusNames[item.status] || item.status }}</a-tag
+            >
+            <a-tooltip title="删除记录">
+              <a-button
+                class="history-delete"
+                type="text"
+                size="small"
+                aria-label="删除记录"
+                :disabled="!canDeleteSession(item)"
+                @click="removeSession(item, $event)"
+                ><template #icon><DeleteOutlined /></template
+              ></a-button>
+            </a-tooltip>
+          </div>
+        </div></a-modal
+      >
+
+      <a-modal
+        v-model:open="settingsOpen"
+        title="识别设置"
+        :footer="null"
+        width="480px"
+        wrap-class-name="client-modal"
+      >
+        <a-form layout="vertical" :disabled="busy || modelLoading">
+          <div class="settings-pair">
+            <a-form-item label="音频语言"
+              ><a-select
+                v-model:value="settings.language"
+                :options="languageOptions" /></a-form-item
+            ><a-form-item label="识别模型"
+              ><a-select v-model:value="settings.model" :options="modelOptions"
+            /></a-form-item>
+          </div>
+          <a-form-item label="推理引擎"
+            ><a-select
+              v-model:value="settings.engine"
+              :options="[
+                { value: 'auto', label: '自动选择（推荐）' },
+                { value: 'mlx', label: 'MLX · Apple 芯片' },
+                { value: 'faster-whisper', label: 'faster-whisper · CPU' },
+              ]" /></a-form-item
+        ></a-form>
+        <div class="setting-toggle">
+          <div>
+            <label for="auto-scroll-switch">跟随最新内容</label>
+            <p class="field-help">转写时自动滚动到最新文字，关闭后可停留阅读。</p>
+          </div>
+          <a-switch id="auto-scroll-switch" aria-label="跟随最新内容"
+            :checked="autoScroll" :loading="autoScrollLoading" :disabled="autoScrollLoading"
+            @change="changeAutoScroll" />
+        </div>
+        <div v-if="status?.model_cache" class="model-preparation"
+          :class="{ 'is-downloaded': selectedModelDownloaded }">
+          <div>
+            <strong><CheckOutlined v-if="selectedModelDownloaded" /> {{ modelLabel }}</strong>
+            <p>{{ selectedModelDownloaded ? '开始转写时自动载入，无需重复下载。' : '首次使用前下载所选模型，完成后会保存在本地。' }}</p>
+          </div>
+          <a-button
+            v-if="!selectedModelDownloaded"
+            :disabled="!connected || busy || modelLoading"
+            :loading="modelLoading"
+            @click="prepareModel"
+            ><CloudDownloadOutlined /> 下载模型</a-button
+          >
+        </div>
+        <a-alert
+          v-if="selectedModelMatches && status?.model.status === 'error'"
+          class="model-error"
+          type="error"
+          show-icon
+          :message="status.model.message"
+      /></a-modal>
+
+      <a-modal
+        v-model:open="helpOpen"
+        title="从悬浮球开始学习"
+        :footer="null"
+        width="480px"
+        wrap-class-name="client-modal"
+        ><div class="help-content">
+          <h3>1. 点开悬浮球，开始聆听</h3>
+          <p>
+            Parrot
+            悬浮在屏幕上。点击展开面板，可拖动到屏幕任意位置，松手后保持当前位置。点击「开始聆听」，等状态变为「正在聆听」后再播放课程。
+          </p>
+          <h3>2. 完成系统声音权限授权</h3>
+          <p>
+            在「系统设置 → 隐私与安全性 → 屏幕与系统音频录制」中允许
+            Parrot，必要时退出并重新打开客户端。仅支持 macOS 13
+            及以上，不采集麦克风。
+          </p>
+          <h3>3. 收起面板，保持专注</h3>
+          <p>
+            点击悬浮球或面板右上角的收起按钮，转写会继续。再次点击即可查看。历史记录和设置位于面板顶部，退出程序请使用菜单栏的
+            Parrot 菜单。
+          </p>
+          <h3>4. 校对并导出 Markdown</h3>
+          <p>
+            停止后等待剩余转写完成，逐段校对或复制、导出
+            Markdown。只保存文字，不保留完整录音。
+          </p>
           <a-alert
-            v-if="networkError"
-            type="error"
-            show-icon
-            class="notice"
-            message="无法连接本地服务"
-            :description="'请确认后端已启动。' + networkError"
-          />
-          <a-alert
-            v-if="selected?.error"
-            type="error"
-            show-icon
-            class="notice"
-            :message="statusNames[selected.status]"
-            :description="selected.error"
-          />
-          <a-alert
-            v-if="status?.active_id && selected?.id !== status.active_id"
             type="info"
             show-icon
-            class="notice"
-            message="另一个学习记录正在转写"
-            ><template #action
-              ><a-button size="small" @click="selectSession(status!.active_id!)"
-                >查看正在转写的记录</a-button
-              ></template
-            ></a-alert
-          >
-
-          <div class="workspace-grid">
-            <div class="workspace-main">
-              <section class="capture-card">
-                <div class="capture-top">
-                  <span class="source-icon"><SoundOutlined /></span>
-                  <div>
-                    <h2>
-                      {{
-                        selected?.source === "file"
-                          ? "文件转写"
-                          : "系统音频转写"
-                      }}
-                    </h2>
-                    <p>
-                      {{
-                        currentActive
-                          ? selected?.status === "preparing"
-                            ? "加载模型后开始采集，请等待状态变为「正在聆听」"
-                            : selected?.status === "stopping"
-                              ? "采集已停止，剩余音频转写完成后即可回听"
-                              : "音频已保存在本地，识别结果会陆续显示"
-                          : "直接捕捉电脑正在播放的声音，戴耳机也没关系"
-                      }}
-                    </p>
-                  </div>
-                  <a-tag
-                    v-if="selected"
-                    :color="
-                      currentActive
-                        ? 'blue'
-                        : selected.status === 'completed'
-                          ? 'green'
-                          : 'default'
-                    "
-                    class="status-tag"
-                    ><span
-                      v-if="selected.status === 'recording'"
-                      class="live-dot"
-                    ></span
-                    >{{ statusNames[selected.status] }}</a-tag
-                  ><span v-else class="ready-label">准备好开始学习</span>
-                </div>
-                <div class="capture-body">
-                  <div
-                    class="audio-visual"
-                    :class="{ listening: selected?.status === 'recording' }"
-                  >
-                    <span
-                      v-for="i in 43"
-                      :key="i"
-                      :style="{
-                        height: `${currentActive && selected?.status === 'recording' ? 5 + (status?.level || 0) * (15 + ((i * 17) % 44)) : 4 + ((i * 13) % 17)}px`,
-                        opacity: currentActive
-                          ? 0.45 + (i % 4) * 0.15
-                          : 0.25 + (i % 5) * 0.12,
-                      }"
-                    ></span>
-                  </div>
-                  <div class="timer">
-                    {{ time(selected?.duration)
-                    }}<span>{{
-                      selected ? "已记录音频" : "等待声音输入"
-                    }}</span>
-                  </div>
-                </div>
-                <div class="capture-actions">
-                  <div class="action-buttons">
-                    <a-button
-                      v-if="!currentActive"
-                      type="primary"
-                      size="large"
-                      :loading="pending"
-                      :disabled="
-                        !connected ||
-                        busy ||
-                        modelLoading ||
-                        !status?.capture_available
-                      "
-                      @click="start"
-                      ><AudioOutlined /> 开始聆听</a-button
-                    ><a-button
-                      v-else
-                      danger
-                      size="large"
-                      :loading="pending || selected?.status === 'stopping'"
-                      :disabled="selected?.status === 'stopping'"
-                      @click="stop"
-                      ><StopOutlined /> 停止{{
-                        selected?.source === "file" ? "转写" : "聆听"
-                      }}</a-button
-                    ><a-button
-                      size="large"
-                      :disabled="!connected || busy || modelLoading"
-                      @click="fileInput?.click()"
-                      ><UploadOutlined /> 导入音频 / 视频</a-button
-                    ><input
-                      ref="fileInput"
-                      type="file"
-                      accept="audio/*,video/*,.mkv,.flac,.m4a,.webm"
-                      class="hidden-input"
-                      @change="upload"
-                    />
-                  </div>
-                  <span class="capture-hint">{{
-                    currentActive ? `待处理约 ${time(lag)}` : "音频不上传云端"
-                  }}</span>
-                </div>
-              </section>
-
-              <section class="transcript-card">
-                <div class="transcript-header">
-                  <a-tabs v-model:activeKey="tab" class="document-tabs"
-                    ><a-tab-pane key="transcript"
-                      ><template #tab
-                        ><FileTextOutlined /> 转写内容
-                        <span v-if="segments.length" class="tab-count">{{
-                          segments.length
-                        }}</span></template
-                      ></a-tab-pane
-                    ><a-tab-pane key="markdown"
-                      ><template #tab
-                        ><CodeOutlined /> Markdown</template
-                      ></a-tab-pane
-                    ></a-tabs
-                  ><span v-if="segments.length" class="word-count"
-                    >{{ characterCount.toLocaleString() }} 字符<span
-                      v-if="reviewCount"
-                    >
-                      · {{ reviewCount }} 段待校对</span
-                    ></span
-                  ><span v-else class="word-count">你的知识，从这里沉淀</span>
-                </div>
-                <div v-if="!segments.length" class="empty-transcript">
-                  <div class="empty-icon">
-                    <FileTextOutlined /><span><SoundOutlined /></span>
-                  </div>
-                  <h3>
-                    {{
-                      currentActive
-                        ? selected?.status === "preparing"
-                          ? "正在准备识别模型"
-                          : "正在把声音变成文字"
-                        : selected
-                          ? "这条记录还没有转写内容"
-                          : "让听过的知识，有迹可循"
-                    }}
-                  </h3>
-                  <p>
-                    {{
-                      currentActive
-                        ? selected?.status === "preparing"
-                          ? "首次使用需要下载模型，下载进度可在后端终端查看。"
-                          : "通常积累 8–24 秒音频后输出一批文字，实际延迟取决于设备。"
-                        : selected
-                          ? "可以检查录音与错误提示，或重新导入音频进行转写。"
-                          : "开始聆听，或导入一个音频 / 视频文件。\n带时间戳的文字会自动出现在这里。"
-                    }}
-                  </p>
-                  <div v-if="currentActive" class="working-label">
-                    <LoadingOutlined /> {{ statusNames[selected!.status] }}
-                  </div>
-                  <div v-else-if="!selected" class="empty-steps">
-                    <span><b>1</b> 播放课程</span><ArrowRightOutlined /><span
-                      ><b>2</b> 自动转写</span
-                    ><ArrowRightOutlined /><span><b>3</b> 导出笔记</span>
-                  </div>
-                </div>
-                <template v-else
-                  ><div
-                    v-if="tab === 'transcript'"
-                    ref="transcript"
-                    class="transcript-scroll"
-                  >
-                    <article
-                      v-for="segment in segments"
-                      :key="segment.id"
-                      class="transcript-segment"
-                      :class="{ 'needs-review': segment.review }"
-                    >
-                      <button
-                        class="timestamp"
-                        :disabled="currentActive"
-                        :title="
-                          currentActive
-                            ? '结束后可点击时间戳回听'
-                            : '点击回听这一段'
-                        "
-                        @click="seek(segment.start)"
-                      >
-                        {{ time(segment.start) }}
-                      </button>
-                      <div class="segment-content">
-                        <template v-if="editingId === segment.id"
-                          ><a-textarea
-                            v-model:value="editText"
-                            :auto-size="{ minRows: 2, maxRows: 12 }"
-                            aria-label="校对转写文字"
-                          />
-                          <div class="edit-actions">
-                            <a-button size="small" @click="editingId = null"
-                              >取消</a-button
-                            ><a-button
-                              type="primary"
-                              size="small"
-                              :loading="savePending"
-                              @click="saveEdit"
-                              ><CheckOutlined /> 保存</a-button
-                            >
-                          </div></template
-                        ><template v-else
-                          ><p>{{ segment.text }}</p>
-                          <span v-if="segment.review" class="review-label"
-                            >建议回听校对</span
-                          ></template
-                        >
-                      </div>
-                      <a-button
-                        v-if="editingId !== segment.id"
-                        type="text"
-                        size="small"
-                        class="edit-button"
-                        aria-label="编辑这一段"
-                        @click="
-                          editingId = segment.id;
-                          editText = segment.text;
-                        "
-                        ><EditOutlined
-                      /></a-button>
-                    </article>
-                  </div>
-                  <div v-else class="markdown-area">
-                    <div class="markdown-toolbar">
-                      <span>MARKDOWN · UTF-8</span
-                      ><a-button type="text" size="small" @click="copyMarkdown"
-                        ><CopyOutlined /> 复制全文</a-button
-                      >
-                    </div>
-                    <pre>{{ markdown }}</pre>
-                  </div>
-                  <div class="transcript-footer">
-                    <span><span class="saved-dot"></span> 自动保存在本地</span
-                    ><a-checkbox
-                      v-if="currentActive"
-                      v-model:checked="autoScroll"
-                      >跟随最新内容</a-checkbox
-                    ><a-button
-                      v-else
-                      type="text"
-                      size="small"
-                      @click="scrollToLatest"
-                      ><ArrowDownOutlined /> 到最后</a-button
-                    >
-                  </div></template
-                >
-              </section>
-              <div
-                v-if="selected && !currentActive && selected.duration > 0"
-                class="playback-card"
-              >
-                <div>
-                  <SoundOutlined /><span>原始录音</span
-                  ><small>点击文字时间戳回听</small>
-                </div>
-                <audio
-                  :key="selected.id"
-                  ref="player"
-                  :src="`/api/sessions/${selected.id}/audio`"
-                  controls
-                  preload="metadata"
-                ></audio>
-              </div>
-              <div class="workspace-footnote">
-                <SafetyCertificateOutlined />
-                本地识别，本地保存。把注意力留给学习本身。<span
-                  >Parrot v0.1</span
-                >
-              </div>
-            </div>
-
-            <aside class="settings-column">
-              <section class="settings-card">
-                <div class="section-title">
-                  <h2>识别设置</h2>
-                  <span>为下一次记录设置</span>
-                </div>
-                <a-form layout="vertical" :disabled="busy || modelLoading"
-                  ><a-form-item label="笔记名称"
-                    ><a-input
-                      v-model:value="settings.title"
-                      :maxlength="120"
-                      placeholder="例如：深度学习 · 第一课" /></a-form-item
-                  ><a-form-item label="音频语言"
-                    ><a-select
-                      v-model:value="settings.language"
-                      :options="languageOptions" /></a-form-item
-                  ><a-form-item label="识别模型"
-                    ><a-select
-                      v-model:value="settings.model"
-                      :options="modelOptions"
-                    />
-                    <div class="field-help">
-                      {{
-                        settings.model === "large-v3"
-                          ? "优先保留识别质量，适合课程与专业内容。"
-                          : settings.model === "large-v3-turbo"
-                            ? "识别更快，复杂术语建议回听校对。"
-                            : "资源占用较低，准确率通常低于大模型。"
-                      }}
-                    </div></a-form-item
-                  ><a-form-item label="专业术语"
-                    ><a-textarea
-                      v-model:value="settings.vocabulary"
-                      placeholder="例如：FastAPI、梯度下降、Transformer"
-                      :maxlength="1000"
-                      :auto-size="{ minRows: 3, maxRows: 5 }"
-                    />
-                    <div class="field-help">
-                      提前填入人名、专有名词，帮助模型识别。
-                    </div></a-form-item
-                  ><a-collapse ghost class="advanced-settings"
-                    ><a-collapse-panel key="engine" header="高级设置"
-                      ><a-form-item label="推理引擎"
-                        ><a-select
-                          v-model:value="settings.engine"
-                          :options="[
-                            { value: 'auto', label: '自动选择（推荐）' },
-                            { value: 'mlx', label: 'MLX · Apple 芯片' },
-                            {
-                              value: 'faster-whisper',
-                              label: 'faster-whisper · CPU',
-                            },
-                          ]" /></a-form-item></a-collapse-panel></a-collapse
-                ></a-form>
-                <div class="model-state">
-                  <span
-                    class="model-state-dot"
-                    :class="{
-                      loaded: status?.model.status === 'ready',
-                      error: status?.model.status === 'error',
-                    }"
-                  ></span
-                  ><span>{{ modelLabel }}</span
-                  ><span v-if="status?.model.engine" class="engine-label">{{
-                    status.model.engine === "mlx" ? "MLX" : "CPU"
-                  }}</span>
-                </div>
-                <a-button
-                  block
-                  :disabled="!connected || busy || modelLoading"
-                  :loading="modelLoading"
-                  @click="prepareModel"
-                  ><CloudDownloadOutlined /> 加载所选模型</a-button
-                >
-                <p v-if="status?.model.status === 'error'" class="model-error">
-                  {{ status.model.message }}
-                </p>
-                <p v-else class="download-hint">
-                  首次使用会下载模型。Large v3 约 3GB，下载完成后可离线识别。
-                </p>
-              </section>
-              <section class="tip-card">
-                <div class="tip-title"><span>✦</span> 一点学习小提示</div>
-                <p>先专注听懂，再回头阅读。<br />转写稿会替你留住细节。</p>
-                <div class="tip-divider"></div>
-                <p class="tip-small">
-                  识别完成后，可直接校对文字、回听原音，再导出为
-                  Markdown，放进你的知识库。
-                </p>
-              </section>
-              <button class="permission-help" @click="helpOpen = true">
-                <InfoCircleOutlined /> 首次使用？查看声音采集设置
-                <ArrowRightOutlined />
-              </button>
-            </aside>
-          </div>
-        </main>
-      </div>
+            message="识别为分段输出，通常积累 8–24 秒音频后出现一批文字。术语和口音仍可能识别错误。"
+          /></div
+      ></a-modal>
     </div>
-    <a-modal
-      v-model:open="helpOpen"
-      title="开始你的第一次学习记录"
-      :footer="null"
-      width="580px"
-      ><div class="help-content">
-        <h3>1. 允许系统声音采集</h3>
-        <p>
-          当前系统声音采集支持 macOS 13
-          及以上。首次点击「开始聆听」后，按系统提示授权。在「系统设置 →
-          隐私与安全性 →
-          屏幕与系统音频录制」中允许启动后端的终端或应用，必要时重启该应用和后端。程序只保存音频，不保存屏幕画面。
-        </p>
-        <h3>2. 等待模型和采集就绪</h3>
-        <p>
-          首次使用需要联网下载模型，可先点击「加载所选模型」。看到「正在聆听」后，再播放课程或视频。戴耳机也可以采集，不需要打开麦克风。
-        </p>
-        <h3>3. 停止、校对、导出</h3>
-        <p>
-          点击停止后等待剩余音频转写完成。点击时间戳回听，点击段落旁的编辑按钮校对。右上角可导出
-          Markdown。
-        </p>
-        <a-alert
-          type="info"
-          show-icon
-          message="准确率与延迟说明"
-          description="Whisper 是分段识别，通常积累 8–24 秒音频后输出文字。大模型在较慢设备上可能积压。口音、背景音乐和专业术语仍可能识别错误，建议先用一小段实际课程验证效果。"
-        />
-        <p class="help-last">
-          其他系统、受保护的媒体或无法授权时，可使用「导入音频 /
-          视频」。录音和笔记保存在项目的 .data 文件夹。
-        </p>
-      </div></a-modal
-    >
   </a-config-provider>
 </template>

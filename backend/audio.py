@@ -30,12 +30,13 @@ class Chunker:
     cutoff assigns overlapping words to exactly one chunk.
     """
 
-    def __init__(self, directory):
+    def __init__(self, directory, offset=0):
         self.directory = directory
         self.buffer = bytearray()
-        self.offset = 0
-        self.cutoff = 0
-        self.total = 0
+        self.initial_samples = round(offset * SAMPLE_RATE)
+        self.offset = self.initial_samples
+        self.cutoff = self.initial_samples
+        self.total = self.initial_samples
         self.index = 0
         self.silent_samples = 0
 
@@ -55,6 +56,11 @@ class Chunker:
     def finish(self):
         if self.total > self.cutoff:
             return self._flush(overlap=False)
+        # A pause can land exactly on a flush boundary. Discard retained context
+        # so a later resume never joins speech from opposite sides of the pause.
+        self.buffer.clear()
+        self.offset = self.total
+        self.silent_samples = 0
         return None
 
     def _flush(self, overlap):
@@ -68,18 +74,3 @@ class Chunker:
         self.offset = self.total - len(retained) // 2
         self.silent_samples = 0
         return chunk
-
-
-def normalized_pcm(path):
-    """Decode local audio/video using PyAV's bundled FFmpeg libraries."""
-    import av
-
-    with av.open(str(path)) as container:
-        if not container.streams.audio:
-            raise ValueError("文件中没有音轨，请选择包含声音的音频或视频。")
-        resampler = av.AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
-        for frame in container.decode(audio=0):
-            for converted in resampler.resample(frame):
-                yield converted.to_ndarray().astype("<i2").tobytes()
-        for converted in resampler.resample(None):
-            yield converted.to_ndarray().astype("<i2").tobytes()

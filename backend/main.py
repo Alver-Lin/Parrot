@@ -1,19 +1,19 @@
 import asyncio
+import hmac
 import logging
 import platform
-import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
 
-from .config import APPLE_SILICON, CAPTURE_BINARY, DATA, ROOT
-from .schemas import EditSegment, Settings
+from .asr import cached_models
+from .config import APPLE_SILICON, CAPTURE_BINARY, DESKTOP_TOKEN, ROOT
+from .schemas import EditMarkdown, EditSegment, Settings
 from .service import TranscriptionService
 from .store import Store, markdown
 
@@ -30,12 +30,12 @@ async def lifespan(app):
     await service.close()
 
 
-app = FastAPI(title="Parrot", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Parrot", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "X-Parrot-Token"],
 )
 
 
@@ -50,6 +50,13 @@ async def localhost_only(request, call_next):
     allowed_origins = {"http://localhost:5173", "http://127.0.0.1:5173", str(request.base_url).rstrip("/")}
     if origin and origin not in allowed_origins:
         return Response("Origin not allowed", status_code=403)
+    if DESKTOP_TOKEN and (
+        request.url.path.startswith("/api/") or request.url.path in {"/docs", "/redoc", "/openapi.json"}
+    ):
+        if not hmac.compare_digest(
+            request.headers.get("X-Parrot-Token", "").encode(), DESKTOP_TOKEN.encode()
+        ):
+            return Response("Desktop access only", status_code=403)
     return await call_next(request)
 
 
@@ -67,9 +74,12 @@ def require_idle():
 
 @app.get("/api/status")
 async def status():
+    active_id = service.active_id if service.busy else None
     return {
         "model": service.recognizer.state,
-        "active_id": service.active_id if service.busy else None,
+        "model_cache": cached_models(),
+        "active_id": active_id,
+        "active_status": store.get_status(active_id) if active_id else None,
         "level": service.level,
         "platform": platform.system(),
         "apple_silicon": APPLE_SILICON,
@@ -101,39 +111,9 @@ async def sessions():
 async def start(settings: Settings):
     require_idle()
     try:
-        sid = service.launch(settings, "system")
+        sid = service.launch(settings)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return require_session(sid)
-
-
-@app.post("/api/sessions/upload", status_code=201)
-async def upload(file: UploadFile = File(...), settings: str = Form(...)):
-    require_idle()
-    try:
-        options = Settings.model_validate_json(settings)
-    except ValidationError as exc:
-        raise HTTPException(422, "转写设置格式不正确") from exc
-    # Stream uploads to disk; never read an entire course into memory.
-    path = DATA / f"upload-{uuid.uuid4().hex}"
-    size = 0
-    try:
-        with path.open("wb") as output:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-                if size > 2 * 1024**3:
-                    raise HTTPException(413, "文件超过 2GB，请先切分文件。")
-                output.write(chunk)
-        if not size:
-            raise HTTPException(400, "文件为空")
-        # Recheck after streaming upload: another request may have started work.
-        require_idle()
-        sid = service.launch(options, "file", uploaded=path)
-    except Exception:
-        path.unlink(missing_ok=True)
-        raise
-    finally:
-        await file.close()
     return require_session(sid)
 
 
@@ -142,11 +122,60 @@ async def detail(sid: str):
     return require_session(sid)
 
 
+@app.post("/api/sessions/{sid}/continue", status_code=202)
+async def continue_session(sid: str):
+    session = require_session(sid)
+    require_idle()
+    if session["status"] not in {"completed", "failed", "interrupted"}:
+        raise HTTPException(409, "请等待这条记录的转写完成后再续写。")
+    try:
+        service.launch(Settings(**session), sid=sid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return require_session(sid)
+
+
+@app.delete("/api/sessions/{sid}")
+async def delete_session(sid: str):
+    require_session(sid)
+    if service.busy and service.active_id == sid:
+        raise HTTPException(409, "请先停止当前聆听，再删除这条记录。")
+    if not store.delete(sid):
+        raise HTTPException(404, "记录不存在")
+    return {"ok": True}
+
+
 @app.post("/api/sessions/{sid}/stop", status_code=202)
 async def stop(sid: str):
     require_session(sid)
     if service.busy and service.active_id == sid:
         service.stop()
+    return require_session(sid)
+
+
+def require_active_session(sid):
+    require_session(sid)
+    if not service.busy or service.active_id != sid:
+        raise HTTPException(409, "这条记录没有正在进行的聆听任务。")
+
+
+@app.post("/api/sessions/{sid}/pause", status_code=202)
+async def pause(sid: str):
+    require_active_session(sid)
+    try:
+        service.pause()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return require_session(sid)
+
+
+@app.post("/api/sessions/{sid}/resume", status_code=202)
+async def resume(sid: str):
+    require_active_session(sid)
+    try:
+        service.resume()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return require_session(sid)
 
 
@@ -169,15 +198,16 @@ async def export(sid: str):
     )
 
 
-@app.get("/api/sessions/{sid}/audio")
-async def audio(sid: str):
+@app.patch("/api/sessions/{sid}/markdown")
+async def edit_markdown(sid: str, body: EditMarkdown):
+    try:
+        saved = store.save_markdown(sid, body.content, body.base_content)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not saved:
+        raise HTTPException(404, "记录不存在")
     session = require_session(sid)
-    if session["status"] in {"preparing", "recording", "transcribing", "stopping"}:
-        raise HTTPException(409, "录音完成后可回听")
-    path = store.audio_path(sid)
-    if not path.exists():
-        raise HTTPException(404, "这条记录没有音频")
-    return FileResponse(path, media_type="audio/wav", filename=f"{sid}.wav")
+    return {"ok": True, "title": session["title"], "content": session["markdown_content"]}
 
 
 dist = ROOT / "frontend" / "dist"

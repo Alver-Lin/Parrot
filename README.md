@@ -1,22 +1,42 @@
 # Parrot
 
-把电脑正在播放的课程、视频或音频转成带时间戳的中英文文字，校对后导出 Markdown。第一版聚焦可靠的声音采集和转写。
+Parrot 是一个 macOS 语音转写客户端。点击屏幕上的悬浮球展开转写面板，把电脑播放的课程声音转为文字，再校对、复制或导出 Markdown。
 
-前端：Vue 3 + TypeScript + Ant Design Vue。后端：Python + FastAPI + SQLite。识别在本地执行，无需 API Key。
+## 使用方式
 
-## 已实现
+构建完成后，双击 `dist/Parrot.app`。客户端启动时只显示悬浮球和菜单栏图标，不需要打开浏览器或单独启动后端。
 
-- macOS 13+ 原生系统声音采集，耳机可用，无需虚拟声卡或麦克风。
-- 导入本地音频或视频（如 MP3、WAV、M4A、FLAC、MP4、WebM；最大 2GB），通过 PyAV 解码。
-- Whisper 中英文转写，Apple 芯片自动选择 MLX，其他设备选择 faster-whisper CPU int8。
-- 静音过滤、专业术语提示、低置信度段落标记、边界上下文和重叠去除。
-- 分段结果持续显示，停止后继续处理剩余音频。
-- SQLite 持久保存、历史记录、逐段编辑、保留识别原文、点击时间戳回听。
-- Markdown 预览、复制、导出，保存原始录音，服务重启后保留已写入的文字。
+1. 点击悬浮球展开面板，可拖动到屏幕任意位置，松开后保持原位，并记住位置供下次启动恢复。
+2. 从顶部齿轮进入识别设置，选择语言、模型和推理引擎。未下载的模型会显示「下载模型」按钮；已下载时显示「模型已下载」，隐藏下载按钮，开始转写时自动从本地载入。
+   「跟随最新内容」开关也在此处，控制转写时是否自动滚动到底部；修改立即生效，并在下次启动时保留。
+3. 点击「开始聆听」，看到「正在聆听」后再播放电脑中的课程。戴耳机也可使用。
+4. 再次点击悬浮球、右上角收起按钮或窗口关闭按钮，面板会隐藏，后台继续转写。
+5. 停止后等待剩余转写完成，校对文字。在 Markdown 页可直接编辑全文，修改会自动保存，也可按 ⌘S 保存。点击「复制全文」或「导出」使用当前编辑内容。
+6. 历史记录从顶部时钟图标打开；退出程序请使用菜单栏 Parrot 图标中的「退出 Parrot」。
 
-## 启动
+打开历史记录后，底部麦克风用于续写当前记录，沿用该记录的识别参数。新文字接在原文后，时长和时间戳继续累计；已编辑的 Markdown 会保留并追加新文字。需要一条独立记录时，先点击顶部「新建」。
 
-需要 Python 3.9+（建议 3.11/3.12）、Node.js 20.19+ 或 22.12+。Mac 系统声音采集还需要 Xcode Command Line Tools（`xcode-select --install`）。Python 与 Node 均需本机安装。
+历史记录名称取 Markdown 开头的一级标题（`# 标题`），修改后会随自动保存同步更新；没有有效一级标题时保留原名称。此前已编辑的文稿也会按该标题显示。
+
+关闭面板不会退出客户端。退出客户端时会停止声音采集并等待剩余转写，超过 30 秒仍未结束时提供继续等待或立即退出的选择。
+
+## 1.0 功能范围
+
+- 可自由放置、记住位置并置顶的原生悬浮球，点击展开与收起转写面板。
+- 转写内容与 Markdown 双标签，历史记录与识别设置弹窗。
+- macOS 13+ 系统声音采集，不使用麦克风或虚拟声卡。
+- Whisper 本地中英文识别，Apple Silicon 优先 MLX，其他环境使用 faster-whisper CPU int8。
+- 静音过滤、时间标记、建议校对提示、逐段修改和历史记录续写。
+- Markdown 全文编辑与自动保存、系统剪贴板复制、系统保存对话框导出；默认正文没有片段时间戳与空白行，保留英文单词之间的空格。编辑后的 Markdown 作为独立文稿保存，原始转写仍保留在「转写内容」页；建议转写完成后整理文稿。
+- 仅持久保存文字与元信息，识别用临时音频片段在任务结束时清理。
+
+1.0 不提供音频/视频文件导入、原始录音保存或回听。旧版本已生成的录音文件不会自动删除，也不通过客户端提供访问。自动截图、知识总结、章节与复习卡片尚未实现。
+
+## 安装与构建
+
+当前为 **macOS 本机客户端构建**，依赖项目现有的 Python 环境与数据目录。应用包尚未捆绑 Python 解释器、全部识别依赖和模型，也未制作供其他电脑直接安装的签名、公证发行包。可以在本机移动或复制 `.app`，但请保留构建时引用的项目 Python 环境与数据目录。
+
+需要 macOS 13+、Xcode Command Line Tools、Python 3.9+（建议 3.11/3.12），以及满足 Vite 要求的 Node.js 20.19 系列或 22.12 以上版本。
 
 首次安装：
 
@@ -24,77 +44,76 @@
 bash scripts/setup.sh
 ```
 
-启动：
+启动：双击 `dist/Parrot.app`，或运行：
 
 ```bash
 bash scripts/start.sh
 ```
 
-打开 <http://127.0.0.1:8765>。macOS 上也可双击 `start.command` 启动已安装的程序。按 Ctrl+C 停止服务。
-
-1. 可以先点击「加载所选模型」下载模型。Large v3 约 3GB，首次下载依赖 Hugging Face 可访问，后端终端会显示进度。
-2. 点击「开始聆听」，按 macOS 提示授权。在「系统设置 → 隐私与安全性 → 屏幕与系统音频录制」中允许启动后端的终端或应用，必要时重启该应用和后端。组件使用显示器过滤器来获取音频，**不保存屏幕画面**。
-3. 等状态变为「正在聆听」后再播放课程。所有应用的系统声音都会被采集，学习时可关闭无关声音。
-4. 点击停止，等剩余转写完成，再回听、校对并导出 Markdown。
-
-浏览器刷新或关闭不会停止后台采集，重新打开页面可回到活动记录；请在界面点击停止，或在终端按 Ctrl+C。单次系统采集最长 8 小时。
-
-Windows/Linux 当前支持文件导入，尚未实现系统回环采集。带 DRM 保护的媒体可能禁止采集。无音轨或不支持的文件会显示失败原因。
-
-## 模型选择与准确率
-
-默认采用 Whisper **large-v3**，优先识别质量。Apple 芯片使用 `mlx-community/whisper-large-v3-mlx`；CPU 使用 faster-whisper 的同系列模型。Turbo 更快，Small 更省内存，建议先用一小段真实课程比较。
-
-默认语言为中文，可保留英文专业术语；英文课程选英语，不确定时选自动检测。人名和术语可填在专业术语框中。
-
-Whisper 是分段识别，不是逐字实时字幕。通常积累 8–24 秒音频后开始输出一批文字，实际延迟还取决于模型、设备与课程内容；识别速度跟不上播放时会积压，停止采集后继续转写。长课程用磁盘保存待处理片段，避免将全部音频堆在内存。大模型需要数 GB 可用内存，建议 16GB 或以上设备。
-
-没有模型可以保证零错误。背景音乐、口音、连读、专有名词和中英切换都可能影响准确率。「建议回听校对」是根据模型平均对数概率的启发式提示，**不是经过校准的准确率分数**，未标记的段落也可能有错误。当前未在你的实际课程上测定字错率。
-
-## 数据与隐私
-
-数据默认在项目 `.data/` 下：`soundscribe.db` 保存记录与文字，`<记录ID>/audio.wav` 保存 16kHz 单声道录音，`models/` 缓存模型。首次下载模型会联网，识别过程不上传音频。可通过 `PARROT_DATA` 环境变量更换目录，通过 `PARROT_PORT` 更换启动端口。请备份 `.data/` 以保留记录。
-
-项目已更名为 Parrot。数据库沿用原文件名以保留历史记录，原有 `SOUNDSCRIBE_DATA` 和 `SOUNDSCRIBE_PORT` 环境变量继续兼容；同时设置时优先使用 `PARROT_` 配置。
-
-服务仅绑定 `127.0.0.1`，无登录体系，供本机单用户使用；拒绝外站 Origin 和非本机 Host。不要直接暴露到公网。
-
-## 开发与测试
-
-```bash
-.venv/bin/python -m pip install -r backend/requirements-dev.txt
-.venv/bin/python -m pytest
-.venv/bin/ruff check backend tests
-```
-
-开发时分两个终端运行：
-
-```bash
-.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --reload
-```
+也可双击项目根目录 `start.command`。客户端需要重建时，先从菜单栏退出 Parrot，再运行：
 
 ```bash
 cd frontend
-npm run dev
+npm ci
+npm run build
+cd ..
+.venv/bin/python scripts/build-client.py
 ```
 
-前端访问 <http://127.0.0.1:5173>，Vite 代理 `/api` 到后端。生产构建：`cd frontend && npm run build`，重启后端后由 FastAPI 提供构建结果。接口文档：<http://127.0.0.1:8765/docs>。
+`scripts/build-client.py` 编译原生窗口和声音采集组件，复制后端与前端资源，生成应用图标，使用固定证书分别签名采集组件和主应用。输出位于 `dist/Parrot.app`，用户数据不写入应用包。
 
-仅预下载模型或验证一个文件：
+本机已有旧项目时，先运行 `.venv/bin/python scripts/setup-signing.py` 初始化一次签名身份。不要删除 `.data/signing/` 或将其中的密钥、密码提交到版本库。构建失败会保留原应用，不会自动降级为临时签名。
+
+有 Apple 证书时，可设置 `PARROT_SIGNING_IDENTITY`（证书 SHA-1 或名称）和可选的 `PARROT_SIGNING_KEYCHAIN`。只有明确设置 `PARROT_ALLOW_ADHOC=1` 才能构建临时签名测试包，该包不能保证权限连续性。
+
+## 系统声音权限
+
+首次开始转写时，按 macOS 提示授权。在「系统设置 → 隐私与安全性 → 屏幕与系统音频录制」中允许 **Parrot**，必要时退出并重新打开客户端。
+
+从原网页开发模式或旧 ad-hoc 构建切换后，需要为当前 Parrot 重新授权一次。后续构建复用固定证书和 Bundle ID。首次安装会在 `.data/signing/` 创建本地开发签名钥匙串；不安装系统信任根，也不用于对外分发。若该目录丢失或更换签名证书，需要重新授权。程序只处理系统声音，不采集麦克风、不保存屏幕画面。
+
+带 DRM 保护的媒体可能禁止采集。当前原生客户端不支持 Windows 或 Linux。
+
+## 模型与准确率
+
+默认模型是 Whisper large-v3，优先识别质量；Turbo 更快，Small 更省资源。Apple Silicon 在安装 MLX Whisper 时自动选择 MLX，否则使用 faster-whisper CPU int8。加载失败不会自动切换引擎，可以在设置中选择其他引擎重试。
+
+中文课程选择中文，英语课程选择英语，不确定时选择自动检测。首次下载模型需要网络，Large v3 的历史缓存大小约 2.9GB；下载过程可查看 `.data/desktop.log`。
+
+聆听时可点击描边圆形按钮暂停，再点击继续接着同一条记录转写。暂停期间不采集声音、计时不增加；已采集的文字仍会处理。实心方框按钮用于结束记录。
+
+Whisper 为分段识别，通常积累 8–24 秒音频后输出一批文字；实际延迟还取决于设备与模型。收起面板后采集和识别继续，较慢设备可能积压待处理片段，停止后仍需等待剩余识别。
+
+没有模型能保证零错误。「建议校对」是启发式提示，不是准确率分数；没有标记的段落也可能出错。当前未在正式课程标注集上测定统一字错率。
+
+## 数据与本地服务
+
+本机构建默认沿用项目 `.data/`，历史笔记与模型缓存可继续使用。`soundscribe.db` 保存文字和记录；`<记录ID>/chunk-*.wav` 是识别临时片段；`models/` 缓存模型。备份前先退出客户端，再复制数据目录。
+
+客户端自动启动独占的 Python 服务，使用随机回环端口和每次启动生成的访问令牌。转写与模型接口需要令牌，不作为日常浏览器入口。客户端退出时结束自己启动的服务；原生宿主异常消失时，后台所有者监控会尝试退出服务。
+
+`desktop.log` 保存后台日志，`desktop-state.json` 保存运行进程、端口和窗口可见状态供诊断，不包含访问令牌。模型下载会联网，识别过程不上传音频。
+
+可选环境变量：`PARROT_DATA` 指定数据目录，`PARROT_PYTHON` 指定构建/测试使用的 Python 解释器。旧变量 `SOUNDSCRIBE_DATA` 仅在直接运行后端的兼容场景保留；客户端优先使用应用包记录的路径或 `PARROT_DATA`。
+
+## 开发与验证
+
+后端测试和静态检查：
 
 ```bash
-.venv/bin/python -m backend.warmup --model large-v3
-.venv/bin/python -m backend.warmup --audio /absolute/path/to/lesson.wav --language zh
+.venv/bin/python -m pip install -r backend/requirements-dev.txt
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check backend tests scripts
 ```
 
-自动测试覆盖真实解码与重采样、分段尾部、上下文去重、文件上传到持久化与导出的链路、文字校对、音频范围请求和异常。测试中的识别引擎使用替身，避免测试依赖大模型下载；真实识别质量须用课程样本另测。
+原生客户端集成验证（需 macOS 图形会话，会短暂显示测试悬浮球和面板，使用独立临时数据）：
 
-系统音频权限和 Metal GPU 必须在普通本机进程中验证，某些受限沙箱无法访问 GPU 或系统录音权限。
+```bash
+.venv/bin/python scripts/test-client.py
+```
 
-前端构建工具的 `picomatch` 传递依赖目前有未提供补丁的 [ReDoS 公告](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)，`npm audit` 仍会报告相关开发依赖。生产启动由 FastAPI 提供静态文件，不启动 Vite，也不接收用户提供的 glob 模式。TypeScript 固定在与 Vue 类型检查器兼容的 5.9 系列。
+验证覆盖真实 AppKit 窗口、拖动边界、展开收起、后台服务、WebKit 桥接、原生复制与导出、历史记录、设置及访问令牌。截图位于 `.data/client-test-artifacts/`。正常测试不采集系统声音，也不修改实际历史记录。
 
-## 后续范围
+仅调试 Vue 界面时，可以在一个终端运行 `bash scripts/start-backend.sh`，另一个终端在 `frontend` 中执行 `npm run dev`，访问本机 5173 开发地址。该模式用于开发，未启用原生悬浮球和客户端令牌。不要与使用同一数据目录的正式客户端同时运行后端；需要并行测试时设置独立 `PARROT_DATA`。
 
-当前导出的是可校对的转写原文。自动章节、关键截图、知识点总结与复习卡片尚未实现，后续可以在时间戳和原始录音基础上继续增加。
-
-参考：[MLX Whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper)、[faster-whisper](https://github.com/SYSTRAN/faster-whisper)、[Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)。
+详细设计见 [开发文档目录](doc/README.md) 和 [客户端设计文档](doc/客户端设计文档.md)。前端构建依赖历史公告及此前样本限制见 [验证记录](docs/VALIDATION.md)，发布时应重新审查依赖。

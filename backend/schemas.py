@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -8,8 +8,12 @@ class Settings(BaseModel):
     language: Literal["auto", "zh", "en"] = "zh"
     model: Literal["large-v3", "large-v3-turbo", "small"] = "large-v3"
     engine: Literal["auto", "mlx", "faster-whisper"] = "auto"
-    vocabulary: str = Field(default="", max_length=1000)
 
 
 class EditSegment(BaseModel):
     text: str = Field(max_length=10000)
+
+
+class EditMarkdown(BaseModel):
+    content: str = Field(max_length=1000000)
+    base_content: Optional[str] = Field(default=None, max_length=1000000)

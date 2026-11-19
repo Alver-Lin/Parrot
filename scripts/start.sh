@@ -1,11 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [ ! -x .venv/bin/python ] || [ ! -d frontend/dist ]; then
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "Parrot 客户端目前仅支持 macOS 13+。"
+  exit 1
+fi
+if [ ! -d dist/Parrot.app ]; then
   echo "请先运行：bash scripts/setup.sh"
   exit 1
 fi
-APP_PORT="${PARROT_PORT:-${SOUNDSCRIBE_PORT:-8765}}"
-echo "Parrot：http://127.0.0.1:$APP_PORT"
-echo "首次系统录音请允许当前终端的「屏幕与系统音频录制」权限。按 Ctrl+C 退出。"
-exec .venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port "$APP_PORT"
+echo "正在启动 Parrot，点击屏幕左侧的悬浮球展开转写面板。"
+exec /usr/bin/open "$PWD/dist/Parrot.app"
