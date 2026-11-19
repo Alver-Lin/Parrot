@@ -7,6 +7,34 @@ import WebKit
 
 private let accent = NSColor(srgbRed: 0.26, green: 0.39, blue: 0.92, alpha: 1)
 
+// Dock Genie uses the private window-server warp API.
+// CGSSetWindowWarp requires float mesh points — CGPoint (Double) will silently no-op.
+private typealias CGSConnectionID = Int32
+private typealias CGSWindowID = Int32
+private struct CGSMeshPoint {
+    var x: Float
+    var y: Float
+}
+private struct CGSWarpPoint {
+    var local: CGSMeshPoint
+    var global: CGSMeshPoint
+}
+
+@_silgen_name("CGSMainConnectionID")
+private func CGSMainConnectionID() -> CGSConnectionID
+@_silgen_name("_CGSDefaultConnection")
+private func _CGSDefaultConnection() -> CGSConnectionID
+@_silgen_name("CGSSetWindowWarp")
+private func CGSSetWindowWarp(_ cid: CGSConnectionID, _ wid: CGSWindowID, _ w: Int32, _ h: Int32,
+                              _ mesh: UnsafePointer<CGSWarpPoint>?) -> Int32
+@_silgen_name("CGSSetWindowAlpha")
+private func CGSSetWindowAlpha(_ cid: CGSConnectionID, _ wid: CGSWindowID, _ alpha: Float) -> Int32
+
+private func cgsConnection() -> CGSConnectionID {
+    let main = CGSMainConnectionID()
+    return main != 0 ? main : _CGSDefaultConnection()
+}
+
 func waveform(in rect: NSRect, color: NSColor, heights: [CGFloat]? = nil) {
     color.setFill()
     let values = heights ?? [0.34, 0.76, 1, 0.55, 0.3]
@@ -36,6 +64,331 @@ func appImage(size: Int) -> NSImage {
 final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+/// Native Dock-style Genie via CGSSetWindowWarp.
+/// Mesh uses float points and Cocoa→CG (top-left) conversion, matching working GenieWarpMesh.
+final class GenieEffectController {
+    private enum Edge { case left, right, top, bottom }
+
+    private var timer: Timer?
+    private var completion: (() -> Void)?
+    private weak var window: NSWindow?
+    private var source = NSRect.zero
+    private var target = NSRect.zero
+    private var edge: Edge = .right
+    private var collapsing = true
+    private var startTime: CFTimeInterval = 0
+    private let duration: CFTimeInterval = 0.5
+    private(set) var isAnimating = false
+
+    private var desktopMaxY: CGFloat {
+        NSScreen.screens.map(\.frame.maxY).max() ?? 0
+    }
+
+    private func clearWarp(_ window: NSWindow, restoreAlpha: Bool = true) {
+        let cid = cgsConnection()
+        let wid = CGSWindowID(window.windowNumber)
+        _ = CGSSetWindowWarp(cid, wid, 0, 0, nil)
+        if restoreAlpha {
+            _ = CGSSetWindowAlpha(cid, wid, 1)
+            window.alphaValue = 1
+        } else {
+            // Keep fully transparent — restoring alpha while orderOut is still
+            // flushing to WindowServer is what causes the end-of-collapse flash.
+            _ = CGSSetWindowAlpha(cid, wid, 0)
+            window.alphaValue = 0
+        }
+    }
+
+    private func setWindowInvisible(_ window: NSWindow) {
+        let cid = cgsConnection()
+        let wid = CGSWindowID(window.windowNumber)
+        _ = CGSSetWindowAlpha(cid, wid, 0)
+        window.alphaValue = 0
+    }
+
+    private func setWindowOpaque(_ window: NSWindow) {
+        let cid = cgsConnection()
+        let wid = CGSWindowID(window.windowNumber)
+        _ = CGSSetWindowAlpha(cid, wid, 1)
+        window.alphaValue = 1
+    }
+
+    /// Hide + clear warp without restoring opacity. Defer clear so orderOut commits first.
+    private func dismissCollapsed(_ window: NSWindow) {
+        setWindowInvisible(window)
+        window.orderOut(nil)
+        DispatchQueue.main.async { [weak window] in
+            guard let window else { return }
+            self.clearWarp(window, restoreAlpha: false)
+        }
+    }
+
+    func cancel() {
+        timer?.invalidate()
+        timer = nil
+        if let window {
+            if collapsing {
+                dismissCollapsed(window)
+            } else {
+                clearWarp(window, restoreAlpha: true)
+            }
+        }
+        window = nil
+        let done = completion
+        completion = nil
+        isAnimating = false
+        done?()
+    }
+
+    private func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
+
+    private func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
+        let t = min(max((x - edge0) / max(edge1 - edge0, 0.0001), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
+    private func easeInOut(_ t: CGFloat) -> CGFloat {
+        t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
+    }
+
+    private func resolveEdge(from source: NSRect, to target: NSRect) -> Edge {
+        let dx = target.midX - source.midX
+        let dy = target.midY - source.midY
+        if abs(dx) >= abs(dy) { return dx >= 0 ? .right : .left }
+        return dy >= 0 ? .top : .bottom
+    }
+
+    private func cubic(_ p0: CGPoint, _ p1: CGPoint, _ p2: CGPoint, _ p3: CGPoint, t: CGFloat) -> CGPoint {
+        let u = 1 - t
+        let uu = u * u
+        let uuu = uu * u
+        let tt = t * t
+        let ttt = tt * t
+        return CGPoint(
+            x: uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x,
+            y: uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y
+        )
+    }
+
+    /// Progress 0 = normal window, 1 = fully poured into the slot.
+    private func applyWarp(progress raw: CGFloat) {
+        guard let window else { return }
+        let progress = collapsing ? raw : (1 - raw)
+        let frame = source
+        let slot = target
+        let screenH = desktopMaxY
+        let winTop = screenH - frame.maxY
+        let winBottom = screenH - frame.minY
+        let slotTop = screenH - slot.maxY
+        let slotBottom = screenH - slot.minY
+
+        // Scale-to-fit the window aspect into the slot.
+        let winAspect = frame.width / max(frame.height, 1)
+        let slotAspect = slot.width / max(slot.height, 1)
+        let fitWidth: CGFloat
+        let fitHeight: CGFloat
+        if winAspect > slotAspect {
+            fitWidth = slot.width
+            fitHeight = slot.width / winAspect
+        } else {
+            fitHeight = slot.height
+            fitWidth = slot.height * winAspect
+        }
+        let fitLeft = slot.midX - fitWidth / 2
+        let fitRight = slot.midX + fitWidth / 2
+        let fitTop = (slotTop + slotBottom) / 2 - fitHeight / 2
+        let fitBottom = fitTop + fitHeight
+
+        // Trailing → near-edge Bezier funnels (CG / top-left space).
+        let leftP0: CGPoint
+        let leftP3: CGPoint
+        let rightP0: CGPoint
+        let rightP3: CGPoint
+        switch edge {
+        case .right:
+            leftP0 = CGPoint(x: frame.minX, y: winTop)
+            leftP3 = CGPoint(x: slot.minX, y: fitTop)
+            rightP0 = CGPoint(x: frame.minX, y: winBottom)
+            rightP3 = CGPoint(x: slot.minX, y: fitBottom)
+        case .left:
+            leftP0 = CGPoint(x: frame.maxX, y: winTop)
+            leftP3 = CGPoint(x: slot.maxX, y: fitTop)
+            rightP0 = CGPoint(x: frame.maxX, y: winBottom)
+            rightP3 = CGPoint(x: slot.maxX, y: fitBottom)
+        case .bottom:
+            leftP0 = CGPoint(x: frame.minX, y: winTop)
+            leftP3 = CGPoint(x: fitLeft, y: slotTop)
+            rightP0 = CGPoint(x: frame.maxX, y: winTop)
+            rightP3 = CGPoint(x: fitRight, y: slotTop)
+        case .top:
+            leftP0 = CGPoint(x: frame.minX, y: winBottom)
+            leftP3 = CGPoint(x: fitLeft, y: slotBottom)
+            rightP0 = CGPoint(x: frame.maxX, y: winBottom)
+            rightP3 = CGPoint(x: fitRight, y: slotBottom)
+        }
+
+        func controls(p0: CGPoint, p3: CGPoint) -> (CGPoint, CGPoint) {
+            switch edge {
+            case .left, .right:
+                let p1 = CGPoint(x: lerp(p0.x, p3.x, 0.45), y: p0.y)
+                let p2 = CGPoint(x: lerp(p0.x, p3.x, 0.65), y: p3.y)
+                return (p1, p2)
+            case .top, .bottom:
+                let p1 = CGPoint(x: p0.x, y: lerp(p0.y, p3.y, 0.45))
+                let p2 = CGPoint(x: p3.x, y: lerp(p0.y, p3.y, 0.65))
+                return (p1, p2)
+            }
+        }
+        let (leftP1, leftP2) = controls(p0: leftP0, p3: leftP3)
+        let (rightP1, rightP2) = controls(p0: rightP0, p3: rightP3)
+
+        // Dock-like scheduling: bend first, then slide.
+        let widthT = easeInOut(smoothstep(0, 0.45, progress))
+        let slideT = easeInOut(smoothstep(0.12, 1.0, progress))
+
+        // Along the travel axis use denser samples; cross axis stays lighter.
+        let travelSteps = 24
+        let crossSteps = 8
+        let horizontal = edge == .left || edge == .right
+        let cols = horizontal ? travelSteps : crossSteps
+        let rows = horizontal ? crossSteps : travelSteps
+        var mesh = [CGSWarpPoint](repeating: CGSWarpPoint(local: CGSMeshPoint(x: 0, y: 0),
+                                                          global: CGSMeshPoint(x: 0, y: 0)),
+                                  count: cols * rows)
+
+        for travelIndex in 0..<travelSteps {
+            let v = CGFloat(travelIndex) / CGFloat(travelSteps - 1) // 0 = trailing, 1 = leading
+            // Stretch: trailing edge lags, leading edge advances first.
+            let stretched = pow(v, 1 + (1 - widthT) * 1.6)
+            let curveT = min(max(lerp(stretched, 1, slideT), 0), 1.35)
+            let left = cubic(leftP0, leftP1, leftP2, leftP3, t: min(curveT, 1))
+            let right = cubic(rightP0, rightP1, rightP2, rightP3, t: min(curveT, 1))
+            let leftEnd: CGPoint
+            let rightEnd: CGPoint
+            if curveT > 1 {
+                let s = min(curveT - 1, 0.35) / 0.35
+                switch edge {
+                case .right:
+                    leftEnd = CGPoint(x: lerp(leftP3.x, slot.maxX, s), y: leftP3.y)
+                    rightEnd = CGPoint(x: lerp(rightP3.x, slot.maxX, s), y: rightP3.y)
+                case .left:
+                    leftEnd = CGPoint(x: lerp(leftP3.x, slot.minX, s), y: leftP3.y)
+                    rightEnd = CGPoint(x: lerp(rightP3.x, slot.minX, s), y: rightP3.y)
+                case .bottom:
+                    leftEnd = CGPoint(x: leftP3.x, y: lerp(leftP3.y, slotBottom, s))
+                    rightEnd = CGPoint(x: rightP3.x, y: lerp(rightP3.y, slotBottom, s))
+                case .top:
+                    leftEnd = CGPoint(x: leftP3.x, y: lerp(leftP3.y, slotTop, s))
+                    rightEnd = CGPoint(x: rightP3.x, y: lerp(rightP3.y, slotTop, s))
+                }
+            } else {
+                leftEnd = left
+                rightEnd = right
+            }
+
+            for crossIndex in 0..<crossSteps {
+                let u = CGFloat(crossIndex) / CGFloat(crossSteps - 1)
+                let global = CGPoint(
+                    x: lerp(leftEnd.x, rightEnd.x, u),
+                    y: lerp(leftEnd.y, rightEnd.y, u)
+                )
+                let localX: Float
+                let localY: Float
+                let index: Int
+                if horizontal {
+                    // Travel along X, cross along Y (top→bottom).
+                    localX = Float(v * frame.width)
+                    localY = Float(u * frame.height)
+                    index = crossIndex * cols + travelIndex
+                } else {
+                    // Travel along Y, cross along X (left→right).
+                    localX = Float(u * frame.width)
+                    localY = Float(v * frame.height)
+                    index = travelIndex * cols + crossIndex
+                }
+                mesh[index] = CGSWarpPoint(
+                    local: CGSMeshPoint(x: localX, y: localY),
+                    global: CGSMeshPoint(x: Float(global.x), y: Float(global.y))
+                )
+            }
+        }
+
+        let cid = cgsConnection()
+        let wid = CGSWindowID(window.windowNumber)
+        let result = CGSSetWindowWarp(cid, wid, Int32(cols), Int32(rows), mesh)
+        if result != 0 {
+            NSLog("[Parrot] CGSSetWindowWarp failed: %d (cid=%d wid=%d)", result, cid, wid)
+        }
+        // Fade earlier so the window is fully invisible well before warp is cleared.
+        let alpha = Float(progress < 0.68 ? 1 : max(0, 1 - (progress - 0.68) / 0.22))
+        _ = CGSSetWindowAlpha(cid, wid, alpha)
+        window.alphaValue = CGFloat(alpha)
+    }
+
+    func animate(window: NSWindow, from source: NSRect, to target: NSRect, collapsing: Bool,
+                 completion: @escaping () -> Void) {
+        cancel()
+        self.window = window
+        self.source = source
+        self.target = target
+        self.edge = resolveEdge(from: source, to: target)
+        self.collapsing = collapsing
+        self.completion = completion
+        isAnimating = true
+        startTime = CACurrentMediaTime()
+
+        if collapsing {
+            setWindowOpaque(window)
+            applyWarp(progress: 0)
+        } else {
+            window.setFrame(source, display: true)
+            setWindowOpaque(window)
+            window.orderFrontRegardless()
+            applyWarp(progress: 0) // visual progress = 1 when expanding
+        }
+
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        tick()
+    }
+
+    private func tick() {
+        guard isAnimating, window != nil else { return }
+        let progress = min(max((CACurrentMediaTime() - startTime) / duration, 0), 1)
+        applyWarp(progress: CGFloat(progress))
+        if progress >= 1 { finish() }
+    }
+
+    private func finish() {
+        timer?.invalidate()
+        timer = nil
+        guard let window else {
+            isAnimating = false
+            let done = completion
+            completion = nil
+            done?()
+            return
+        }
+        if collapsing {
+            // Never restore alpha here — that flash is the full rectangle reappearing
+            // for one frame after warp is removed but before orderOut lands.
+            dismissCollapsed(window)
+        } else {
+            window.setFrame(source, display: true)
+            clearWarp(window, restoreAlpha: true)
+            window.makeKeyAndOrderFront(nil)
+        }
+        self.window = nil
+        isAnimating = false
+        let done = completion
+        completion = nil
+        done?()
+    }
 }
 
 final class OrbView: NSView {
@@ -160,14 +513,17 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     var pendingSettings = false
     var copiedForTest: String?
     var autoScrollForTest = true
+    var screenshotInProgress = false
+    var screenshotProcess: Process?
     var activity: NSObjectProtocol?
     var startupActivity: NSObjectProtocol?
     var lastDesktopState: Data?
+    let genie = GenieEffectController()
     let localSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]
         configuration.timeoutIntervalForRequest = 2
-        configuration.timeoutIntervalForResource = 5
+        configuration.timeoutIntervalForResource = 60
         return URLSession(configuration: configuration)
     }()
     var dataDirectory: URL!
@@ -470,18 +826,48 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     }
 
     @objc func toggleWorkspace() {
-        if workspace.isVisible { workspace.orderOut(nil) }
-        else { showWorkspace() }
-        writeDesktopState()
+        if genie.isAnimating { return }
+        if workspace.isVisible { hideWorkspace(animated: !selfTesting) }
+        else { showWorkspace(animated: !selfTesting) }
     }
 
-    func showWorkspace() {
+    func orbGenieFrame() -> NSRect {
+        orbPanel.frame.insetBy(dx: 12, dy: 12)
+    }
+
+    func hideWorkspace(animated: Bool) {
+        guard workspace.isVisible else { writeDesktopState(); return }
+        if !animated || selfTesting {
+            genie.cancel()
+            workspace.orderOut(nil)
+            writeDesktopState()
+            return
+        }
+        let start = workspace.frame
+        let end = orbGenieFrame()
+        writeDesktopState()
+        genie.animate(window: workspace, from: start, to: end, collapsing: true) { [weak self] in
+            self?.writeDesktopState()
+        }
+    }
+
+    func showWorkspace(animated: Bool = true) {
+        if genie.isAnimating { return }
         positionWorkspace()
         NSApp.activate(ignoringOtherApps: true)
-        workspace.makeKeyAndOrderFront(nil)
         if !serverReady { workspace.title = "Parrot · 正在启动…" }
         else { workspace.title = "Parrot" }
+        let end = workspace.frame
+        let start = orbGenieFrame()
+        if !animated || selfTesting {
+            workspace.makeKeyAndOrderFront(nil)
+            writeDesktopState()
+            return
+        }
         writeDesktopState()
+        genie.animate(window: workspace, from: end, to: start, collapsing: false) { [weak self] in
+            self?.writeDesktopState()
+        }
     }
 
     @objc func openCaptureSettings() {
@@ -495,9 +881,15 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
         else { webView.evaluateJavaScript("window.dispatchEvent(new Event('parrot-open-settings'))") }
     }
 
-    func windowShouldClose(_ sender: NSWindow) -> Bool { sender.orderOut(nil); writeDesktopState(); return false }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hideWorkspace(animated: !selfTesting)
+        return false
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWorkspace(); return true }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWorkspace(animated: !selfTesting)
+        return true
+    }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.host == "127.0.0.1",
@@ -524,7 +916,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
         case "openCaptureSettings":
             if !selfTesting { openCaptureSettings() }
             reply(id, value: ["opened": true])
-        case "collapse": workspace.orderOut(nil); writeDesktopState()
+        case "collapse": hideWorkspace(animated: !selfTesting)
         case "state":
             orbView.paused = body["paused"] as? Bool ?? false
             orbView.active = body["active"] as? Bool ?? false
@@ -541,11 +933,22 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             if selfTesting { copiedForTest = text }
             else { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
             reply(id, value: ["copied": true])
+        case "screenshot":
+            guard let sid = body["sessionId"] as? String else { reply(id, error: "截图记录不正确"); return }
+            let segmentId = body["segmentId"] as? Int
+            Task { await captureScreenshot(sid, segmentId: segmentId, replyID: id) }
         case "export":
             guard let sessionID = body["sessionId"] as? String else { reply(id, error: "记录不存在"); return }
             Task { await exportMarkdown(sessionID, title: body["title"] as? String ?? "学习记录", content: body["content"] as? String, replyID: id) }
         default: reply(id, error: "不支持的客户端操作")
         }
+    }
+
+    func exportFolderName(from title: String) -> String {
+        var name = title.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: ":", with: "_").trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.lowercased().hasSuffix(".md") { name = String(name.dropLast(3)) }
+        return name.isEmpty ? "学习记录" : name
     }
 
     func exportMarkdown(_ sid: String, title: String, content: String?, replyID: String?) async {
@@ -559,24 +962,135 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
                 guard response.statusCode == 200 else { throw appError("无法导出这条记录") }
                 data = download
             }
+            let folderName = exportFolderName(from: title)
             if selfTesting {
-                let destination = selfTestDirectory.appendingPathComponent("export-test.md")
-                try data.write(to: destination, options: .atomic)
+                let destination = selfTestDirectory.appendingPathComponent("export-test")
+                try await writeMarkdownExport(data, sid: sid, folder: destination)
                 reply(replyID, value: ["saved": true])
                 return
             }
             let panel = NSSavePanel()
-            panel.title = "导出 Markdown"
-            panel.nameFieldStringValue = title.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\\", with: "_") + ".md"
-            panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+            panel.title = "导出学习记录"
+            panel.message = "将保存为一个文件夹，内含 Markdown 文档和 photo 截图目录"
+            panel.nameFieldLabel = "导出为："
+            panel.nameFieldStringValue = folderName
+            panel.allowedContentTypes = [.folder]
             panel.canCreateDirectories = true
             panel.beginSheetModal(for: workspace) { [weak self] result in
                 guard let self = self else { return }
                 guard result == .OK, let destination = panel.url else { self.reply(replyID, value: ["saved": false]); return }
-                do { try data.write(to: destination, options: .atomic); self.reply(replyID, value: ["saved": true]) }
-                catch { self.reply(replyID, error: error.localizedDescription) }
+                Task {
+                    do {
+                        try await self.writeMarkdownExport(data, sid: sid, folder: destination)
+                        self.reply(replyID, value: ["saved": true])
+                    } catch { self.reply(replyID, error: error.localizedDescription) }
+                }
             }
         } catch { reply(replyID, error: error.localizedDescription) }
+    }
+
+    func writeMarkdownExport(_ data: Data, sid: String, folder: URL) async throws {
+        var root = folder
+        if root.pathExtension.lowercased() == "md" {
+            root = root.deletingPathExtension()
+        }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else { throw appError("导出位置已存在同名文件，请换一个名称") }
+        } else {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        let markdownFile = root.appendingPathComponent(root.lastPathComponent + ".md")
+        let session = try await requestJSON("/api/sessions/\(sid)")
+        let content = String(decoding: data, as: UTF8.self)
+        var exportedPhotos = false
+        for segment in session["segments"] as? [[String: Any]] ?? [] {
+            guard segment["kind"] as? String == "image", let filename = segment["photo_filename"] as? String,
+                  filename.range(of: "^[a-f0-9]{32}\\.png$", options: .regularExpression) != nil,
+                  content.contains("photo/" + filename) else { continue }
+            let (image, response) = try await request("/api/sessions/\(sid)/photo/\(filename)", timeout: 30)
+            guard response.statusCode == 200 else { throw appError("导出截图失败，请重试") }
+            let photoFolder = root.appendingPathComponent("photo", isDirectory: true)
+            try FileManager.default.createDirectory(at: photoFolder, withIntermediateDirectories: true)
+            let output = photoFolder.appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: output.path) {
+                guard try Data(contentsOf: output) == image else { throw appError("photo 文件夹中存在不同内容的同名截图") }
+            } else {
+                try image.write(to: output, options: .atomic)
+            }
+            exportedPhotos = true
+        }
+        if !exportedPhotos {
+            let photoFolder = root.appendingPathComponent("photo", isDirectory: true)
+            try FileManager.default.createDirectory(at: photoFolder, withIntermediateDirectories: true)
+        }
+        try data.write(to: markdownFile, options: .atomic)
+    }
+
+    func captureScreenshot(_ sid: String, segmentId: Int? = nil, replyID: String?) async {
+        guard sid.count == 32, sid.allSatisfy({ $0.isHexDigit }) else { reply(replyID, error: "记录标识不正确"); return }
+        guard !screenshotInProgress else { reply(replyID, error: "请先完成当前截图"); return }
+        screenshotInProgress = true
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("parrot-screenshot-\(UUID().uuidString).png")
+        defer {
+            screenshotInProgress = false
+            screenshotProcess = nil
+            try? FileManager.default.removeItem(at: file)
+            if !quitting { orbPanel.orderFrontRegardless() }
+            writeDesktopState()
+        }
+        do {
+            _ = try await requestJSON("/api/sessions/\(sid)")
+            guard selfTesting || CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
+                else { throw appError("请在系统设置中允许 Parrot 的屏幕录制权限后再截图。") }
+            workspace.orderOut(nil)
+            orbPanel.orderOut(nil)
+            writeDesktopState()
+            try await Task.sleep(nanoseconds: 200_000_000)
+            if selfTesting {
+                let fixture = NSImage(size: NSSize(width: 240, height: 120))
+                fixture.lockFocus()
+                accent.setFill()
+                NSBezierPath(rect: NSRect(x: 0, y: 0, width: 240, height: 120)).fill()
+                ("Parrot screenshot test" as NSString).draw(at: NSPoint(x: 15, y: 50), withAttributes: [
+                    .foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 18),
+                ])
+                fixture.unlockFocus()
+                guard let tiff = fixture.tiffRepresentation,
+                      let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+                    else { throw appError("无法生成截图") }
+                try png.write(to: file)
+            } else {
+                let process = Process()
+                screenshotProcess = process
+                process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                process.arguments = ["-i", "-s", "-x", "-t", "png", file.path]
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    process.terminationHandler = { _ in continuation.resume() }
+                    do { try process.run() }
+                    catch { process.terminationHandler = nil; continuation.resume(throwing: error) }
+                }
+            }
+            guard !quitting, FileManager.default.fileExists(atPath: file.path) else {
+                reply(replyID, value: ["captured": false]); return
+            }
+            let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber
+            guard (size?.intValue ?? 0) <= 25 * 1024 * 1024 else { throw appError("截图过大，请缩小截图范围。") }
+            let image = try Data(contentsOf: file)
+            let path = segmentId.map { "/api/sessions/\(sid)/segments/\($0)/photo" }
+                ?? "/api/sessions/\(sid)/screenshots"
+            let expected = segmentId == nil ? 201 : 200
+            let (body, response) = try await request(path, method: "POST", body: image,
+                contentType: "image/png", timeout: 30)
+            guard response.statusCode == expected else {
+                let error = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+                throw appError(error?["detail"] as? String ?? "截图保存失败，请重试")
+            }
+            reply(replyID, value: ["captured": true])
+        } catch {
+            if !quitting { showWorkspace() }
+            reply(replyID, error: error.localizedDescription)
+        }
     }
 
     func reply(_ id: String?, value: Any = NSNull(), error: String? = nil) {
@@ -609,6 +1123,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     }
 
     func finishQuit() async {
+        if let process = screenshotProcess, process.isRunning { process.terminate() }
         statusTimer?.invalidate()
         if let startupActivity = startupActivity { ProcessInfo.processInfo.endActivity(startupActivity); self.startupActivity = nil }
         if let activity = activity { ProcessInfo.processInfo.endActivity(activity); self.activity = nil }
@@ -643,10 +1158,14 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
         if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
     }
 
-    func request(_ path: String, method: String = "GET") async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+    func request(_ path: String, method: String = "GET", body: Data? = nil,
+                 contentType: String? = nil, timeout: TimeInterval = 2) async throws -> (Data, HTTPURLResponse) {
+        guard let url = URL(string: path, relativeTo: baseURL) else { throw appError("请求地址不正确") }
+        var request = URLRequest(url: url.absoluteURL)
         request.httpMethod = method
-        request.timeoutInterval = 2
+        request.httpBody = body
+        request.timeoutInterval = timeout
+        if let contentType = contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         request.setValue(token, forHTTPHeaderField: "X-Parrot-Token")
         let (data, response) = try await localSession.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw appError("服务响应不正确") }
@@ -728,7 +1247,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
                 else { throw appError("继续录制后应恢复绿色及律动") }
             applyState(["level": 0])
             _ = try await webView.callAsyncJavaScript("return await window.parrotNative.request('export', {sessionId:sid, title:'客户端验证'});", arguments: ["sid": sid], in: nil, contentWorld: .page)
-            let exported = try String(contentsOf: selfTestDirectory.appendingPathComponent("export-test.md"), encoding: .utf8)
+            let exported = try String(contentsOf: selfTestDirectory.appendingPathComponent("export-test/export-test.md"), encoding: .utf8)
             guard exported.contains("English words") else { throw appError("原生导出内容不正确") }
             let historyWorks = try await webView.callAsyncJavaScript("""
               document.querySelector('[aria-label="历史记录"]').click();
@@ -793,12 +1312,65 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             """, arguments: ["content": editedMarkdown], in: nil, contentWorld: .page) as? Bool
             guard markdownEditWorks == true else { throw appError("Markdown 编辑或自动保存失败") }
             guard copiedForTest == editedMarkdown else { throw appError("复制没有使用编辑后的 Markdown") }
-            let editedExport = try String(contentsOf: selfTestDirectory.appendingPathComponent("export-test.md"), encoding: .utf8)
+            let editedExport = try String(contentsOf: selfTestDirectory.appendingPathComponent("export-test/export-test.md"), encoding: .utf8)
             guard editedExport == editedMarkdown else { throw appError("导出没有使用编辑后的 Markdown") }
             let (editedData, _) = try await request("/api/sessions/\(sid)")
             let editedSession = try JSONSerialization.jsonObject(with: editedData) as? [String: Any]
             guard editedSession?["markdown_content"] as? String == editedMarkdown else { throw appError("Markdown 未持久保存") }
             guard editedSession?["title"] as? String == "直接编辑验证" else { throw appError("记录名称未跟随 Markdown 标题") }
+            let screenshotInserted = try await webView.callAsyncJavaScript("""
+              if (document.querySelector('[aria-label="插入截图"]')) return false;
+              const originalFetch = window.fetch;
+              // Simulate an active paused record without acquiring real audio.
+              window.fetch = async (input, options) => {
+                const response = await originalFetch(input, options);
+                const path = new URL(String(input), location.href).pathname;
+                if (options?.method && options.method !== 'GET') return response;
+                if (path !== '/api/status' && path !== '/api/sessions/' + sid) return response;
+                const body = await response.json();
+                if (path === '/api/status') {
+                  body.active_id = sid;
+                  body.active_status = 'paused';
+                } else {
+                  body.status = 'paused';
+                }
+                return new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+              };
+              try {
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const buttons = ['插入截图', '继续聆听', '停止聆听'].map(label => document.querySelector('[aria-label="' + label + '"]'));
+                if (buttons.some(button => !button)) return false;
+                const bounds = buttons.map(button => button.getBoundingClientRect());
+                if (bounds.some(rect => Math.abs(rect.width - 44) > 0.5 || Math.abs(rect.height - 44) > 0.5
+                  || Math.abs(rect.top - bounds[0].top) > 0.5)) return false;
+                buttons[0].click();
+                await new Promise(resolve => setTimeout(resolve, 1800));
+                const image = document.querySelector('.transcript-photo img');
+                return !!image && image.complete && image.naturalWidth > 0;
+              } finally {
+                window.fetch = originalFetch;
+              }
+            """, arguments: ["sid": sid], in: nil, contentWorld: .page) as? Bool
+            guard screenshotInserted == true else { throw appError("截图没有插入转写内容或无法显示") }
+            guard !workspace.isVisible && orbPanel.isVisible else { throw appError("截图后应保持看板收起并显示悬浮球") }
+            showWorkspace()
+            let (photoSessionData, _) = try await request("/api/sessions/\(sid)")
+            let photoSession = try JSONSerialization.jsonObject(with: photoSessionData) as? [String: Any]
+            let photoSegments = photoSession?["segments"] as? [[String: Any]] ?? []
+            guard let photo = photoSegments.first(where: { $0["kind"] as? String == "image" }),
+                  let photoFilename = photo["photo_filename"] as? String else { throw appError("截图没有持久保存") }
+            let (photoData, photoResponse) = try await request("/api/sessions/\(sid)/photo/\(photoFilename)")
+            guard photoResponse.statusCode == 200 else { throw appError("截图接口不能读取图片") }
+            _ = try await webView.callAsyncJavaScript("""
+              const button = Array.from(document.querySelectorAll('button')).find(node => node.textContent.includes('导出'));
+              button.click();
+              await new Promise(resolve => setTimeout(resolve, 600));
+              return true;
+            """, arguments: [:], in: nil, contentWorld: .page)
+            let photoExport = try String(contentsOf: selfTestDirectory.appendingPathComponent("export-test/export-test.md"), encoding: .utf8)
+            let exportedPhoto = try Data(contentsOf: selfTestDirectory.appendingPathComponent("export-test/photo/\(photoFilename)"))
+            guard photoExport.contains("photo/" + photoFilename) && exportedPhoto == photoData
+                else { throw appError("Markdown 导出未包含相对图片引用及 photo 文件夹") }
             let historyTitleWorks = try await webView.callAsyncJavaScript("""
               document.querySelector('[aria-label="历史记录"]').click();
               await new Promise(resolve => setTimeout(resolve, 350));

@@ -2,8 +2,11 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import { Modal, message, theme } from "ant-design-vue";
 import zhCN from "ant-design-vue/es/locale/zh_CN";
+import TranscriptPhoto from "./TranscriptPhoto.vue";
+import MarkdownPreview from "./MarkdownPreview.vue";
 import {
   AudioOutlined,
+  CameraOutlined,
   ArrowDownOutlined,
   ArrowRightOutlined,
   CheckOutlined,
@@ -29,6 +32,7 @@ import {
   api,
   time,
   toMarkdown,
+  type Segment,
   type Session,
   type Settings,
   type Status,
@@ -41,6 +45,7 @@ import {
   copyText,
   inDesktop,
   saveMarkdown,
+  takeScreenshot,
   loadAutoScroll,
   saveAutoScroll,
   updateOrb,
@@ -49,6 +54,8 @@ import {
 const settingsOpen = ref(false);
 const historyOpen = ref(false);
 const exporting = ref(false);
+const screenshotPending = ref(false);
+const markdownView = ref<"source" | "preview">("source");
 const isDesktop = inDesktop();
 const headerTooltipProps = {
   placement: "bottom" as const,
@@ -92,13 +99,18 @@ const modelLoading = computed(() => status.value?.model.status === "loading");
 const currentActive = computed(
   () => !!selected.value && activeStates.includes(selected.value.status),
 );
+const showListeningActions = computed(
+  () =>
+    currentActive.value &&
+    !(status.value?.active_id && selected.value?.id !== status.value.active_id),
+);
 const segments = computed(() => selected.value?.segments ?? []);
 const reviewCount = computed(
   () => segments.value.filter((segment) => segment.review).length,
 );
 const characterCount = computed(() =>
   tab.value === "markdown" ? markdown.value.replace(/\s/g, "").length : segments.value.reduce(
-    (sum, segment) => sum + segment.text.replace(/\s/g, "").length,
+    (sum, segment) => sum + (segment.kind === "image" ? 0 : segment.text.replace(/\s/g, "").length),
     0,
   ),
 );
@@ -125,12 +137,15 @@ const markdown = computed({
     markdownTimers.set(id, setTimeout(() => void saveMarkdownDraft(id), 600));
   },
 });
+const markdownSaveVisible = computed(() => {
+  const draft = markdownDraft.value;
+  return !!draft && (draft.error || draft.saving || draft.text !== draft.saved);
+});
 const markdownSaveLabel = computed(() => {
   const draft = markdownDraft.value;
   if (draft?.error) return "保存失败，点击重试";
   if (draft?.saving) return "正在保存…";
-  if (draft && draft.text !== draft.saved) return "待保存";
-  return draft || selected.value?.markdown_content != null ? "已保存" : "可直接编辑";
+  return "待保存";
 });
 
 function saveMarkdownDraft(id = selected.value?.id): Promise<void> {
@@ -485,8 +500,9 @@ async function exportMarkdown() {
       selected.value.id,
       selected.value.title,
       markdown.value,
+      segments.value.some((segment) => segment.kind === "image"),
     );
-    if (result.saved) message.success("Markdown 已导出");
+    if (result.saved) message.success("已导出为文件夹");
   } catch (error) {
     showError(error);
   } finally {
@@ -496,6 +512,62 @@ async function exportMarkdown() {
 
 function openSettings() {
   settingsOpen.value = true;
+}
+
+async function refreshSessionAfterPhotoChange(sessionId: string, revision: number, scroll = false) {
+  const detail = await api<Session>(`/sessions/${sessionId}`);
+  if (selected.value?.id !== sessionId || revision !== selectionRevision) return;
+  selected.value = detail;
+  const draft = markdownDrafts[sessionId];
+  if (draft && !draft.saving) draft.text = draft.saved = toMarkdown(detail);
+  if (scroll) {
+    tab.value = "transcript";
+    await nextTick();
+    scrollToLatest();
+  }
+}
+
+async function captureScreenshot(segmentId?: number) {
+  if (!selected.value || screenshotPending.value) return;
+  const sessionId = selected.value.id;
+  const revision = selectionRevision;
+  screenshotPending.value = true;
+  try {
+    await saveMarkdownDraft(sessionId);
+    if (markdownDrafts[sessionId]?.error || revision !== selectionRevision) return;
+    const result = await takeScreenshot(sessionId, segmentId);
+    if (!result.captured) return;
+    await refreshSessionAfterPhotoChange(sessionId, revision, segmentId == null);
+    if (segmentId != null) message.success("截图已更新");
+  } catch (error) {
+    showError(error);
+  } finally {
+    screenshotPending.value = false;
+  }
+}
+
+function removeScreenshot(segment: Segment) {
+  if (!selected.value || screenshotPending.value) return;
+  const sessionId = selected.value.id;
+  const revision = selectionRevision;
+  Modal.confirm({
+    title: "删除截图",
+    content: "确定删除这张截图？删除后无法恢复。",
+    okText: "删除",
+    okType: "danger",
+    cancelText: "取消",
+    centered: true,
+    async onOk() {
+      try {
+        await api(`/sessions/${sessionId}/segments/${segment.id}`, { method: "DELETE" });
+        await refreshSessionAfterPhotoChange(sessionId, revision);
+        message.success("截图已删除");
+      } catch (error) {
+        showError(error);
+        throw error;
+      }
+    },
+  });
 }
 
 async function changeAutoScroll(value: boolean | string | number) {
@@ -690,7 +762,10 @@ onUnmounted(() => {
           >
             <span class="timestamp">{{ time(segment.start) }}</span>
             <div class="segment-content">
-              <template v-if="editingId === segment.id"
+              <TranscriptPhoto v-if="segment.kind === 'image' && segment.photo_filename"
+                :session-id="selected!.id" :filename="segment.photo_filename"
+                :alt="`截图 ${time(segment.start)}`" />
+              <template v-else-if="editingId === segment.id"
                 ><a-textarea
                   v-model:value="editText"
                   aria-label="校对转写文字"
@@ -714,8 +789,33 @@ onUnmounted(() => {
                 ></template
               >
             </div>
+            <div v-if="segment.kind === 'image'" class="segment-actions">
+              <a-tooltip v-if="isDesktop" title="重新截图">
+                <a-button
+                  type="text"
+                  size="small"
+                  class="edit-button"
+                  aria-label="重新截图"
+                  :disabled="screenshotPending"
+                  :loading="screenshotPending"
+                  @click="captureScreenshot(segment.id)"
+                  ><CameraOutlined
+                /></a-button>
+              </a-tooltip>
+              <a-tooltip title="删除截图">
+                <a-button
+                  type="text"
+                  size="small"
+                  class="edit-button delete-button"
+                  aria-label="删除截图"
+                  :disabled="screenshotPending"
+                  @click="removeScreenshot(segment)"
+                  ><DeleteOutlined
+                /></a-button>
+              </a-tooltip>
+            </div>
             <a-button
-              v-if="editingId !== segment.id"
+              v-else-if="editingId !== segment.id"
               type="text"
               size="small"
               class="edit-button"
@@ -731,22 +831,56 @@ onUnmounted(() => {
 
         <div v-else class="markdown-area">
           <div class="markdown-toolbar">
-            <span>MARKDOWN · UTF-8</span>
+            <div class="markdown-view-switch" role="tablist" aria-label="Markdown 视图">
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="markdownView === 'source'"
+                :class="{ active: markdownView === 'source' }"
+                @click="markdownView = 'source'"
+              >
+                Markdown
+              </button>
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="markdownView === 'preview'"
+                :class="{ active: markdownView === 'preview' }"
+                @click="markdownView = 'preview'; saveMarkdownDraft()"
+              >
+                Preview
+              </button>
+            </div>
             <div class="markdown-actions">
-              <a-button type="text" size="small" :loading="markdownDraft?.saving"
-                :disabled="!markdownDraft || (!markdownDraft.error && markdownDraft.text === markdownDraft.saved)"
-                aria-label="保存 Markdown" @click="saveMarkdownDraft()"
+              <a-button
+                v-if="markdownView === 'source' && markdownSaveVisible"
+                type="text"
+                size="small"
+                :loading="markdownDraft?.saving"
+                :disabled="!!markdownDraft?.saving"
+                aria-label="保存 Markdown"
+                @click="saveMarkdownDraft()"
               >{{ markdownSaveLabel }}</a-button>
               <a-button type="text" size="small" @click="copyMarkdown"
               ><CopyOutlined /> 复制全文</a-button
               >
             </div>
           </div>
-          <textarea v-model="markdown" class="markdown-editor" aria-label="编辑 Markdown"
-            spellcheck="false" @blur="saveMarkdownDraft()"
+          <textarea
+            v-if="markdownView === 'source'"
+            v-model="markdown"
+            class="markdown-editor"
+            aria-label="编辑 Markdown"
+            spellcheck="false"
+            @blur="saveMarkdownDraft()"
             @keydown.meta.s.prevent="saveMarkdownDraft()"
             @keydown.ctrl.s.prevent="saveMarkdownDraft()"
           ></textarea>
+          <MarkdownPreview
+            v-else-if="selected"
+            :content="markdown"
+            :session-id="selected.id"
+          />
         </div>
 
         <div class="capture-dock">
@@ -759,12 +893,34 @@ onUnmounted(() => {
             <span class="record-time" :aria-label="`已聆听 ${time(selected?.duration)}`">{{
               time(selected?.duration)
             }}</span>
-            <Transition name="capture-pause">
-              <div v-if="currentActive && !(status?.active_id && selected?.id !== status.active_id)"
-                class="capture-pause-slot">
+            <Transition name="capture-expand">
+              <div
+                v-if="isDesktop && showListeningActions"
+                key="screenshot"
+                class="capture-expand-slot"
+              >
+                <a-tooltip title="截图并插入当前记录">
+                  <a-button
+                    class="capture-action secondary-action"
+                    shape="circle"
+                    aria-label="插入截图"
+                    :loading="screenshotPending"
+                    :disabled="!connected || screenshotPending || pending"
+                    @click="captureScreenshot()"
+                    ><template #icon><CameraOutlined /></template
+                  ></a-button>
+                </a-tooltip>
+              </div>
+            </Transition>
+            <Transition name="capture-expand">
+              <div
+                v-if="showListeningActions"
+                key="pause"
+                class="capture-expand-slot"
+              >
                 <a-tooltip :title="selected?.status === 'paused' ? '继续聆听' : '暂停聆听'">
                   <a-button
-                    class="capture-action pause-action"
+                    class="capture-action secondary-action"
                     shape="circle"
                     :aria-label="selected?.status === 'paused' ? '继续聆听' : '暂停聆听'"
                     :disabled="pending || !connected || !['recording', 'paused'].includes(selected?.status || '')"
@@ -792,8 +948,10 @@ onUnmounted(() => {
                 ><template #icon><ArrowRightOutlined /></template></a-button
               >
             </a-tooltip>
-            <template v-else-if="currentActive">
-              <a-tooltip :title="selected?.status === 'stopping' ? '正在完成剩余转写' : '停止聆听'">
+            <a-tooltip
+              v-else-if="currentActive"
+              :title="selected?.status === 'stopping' ? '正在完成剩余转写' : '停止聆听'"
+            >
               <a-button
                 class="capture-action"
                 type="primary"
@@ -802,10 +960,9 @@ onUnmounted(() => {
                 :disabled="pausePending || selected?.status === 'stopping'"
                 :loading="pending || selected?.status === 'stopping'"
                 @click="stop"
-                ><template #icon><span class="stop-glyph" aria-hidden="true"></span></template></a-button
-              >
-              </a-tooltip>
-            </template>
+                ><template #icon><span class="stop-glyph" aria-hidden="true"></span></template
+              ></a-button>
+            </a-tooltip>
             <a-tooltip v-else :title="selected ? '继续聆听，接着当前记录转写' : '开始聆听'">
               <a-button
                 class="capture-action"

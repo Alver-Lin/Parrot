@@ -36,7 +36,7 @@ export function updateOrb(active: boolean, level: number, connected: boolean, pa
   window.parrotNative?.send("state", { active, level, connected, paused });
 }
 
-export async function saveMarkdown(id: string, title: string, content: string) {
+export async function saveMarkdown(id: string, title: string, content: string, hasPhotos = false) {
   if (window.parrotNative) {
     return window.parrotNative.request<{ saved: boolean }>("export", {
       sessionId: id,
@@ -44,15 +44,33 @@ export async function saveMarkdown(id: string, title: string, content: string) {
       content,
     });
   }
-  const url = URL.createObjectURL(
-    new Blob([content], { type: "text/markdown;charset=utf-8" }),
-  );
+  let blob: Blob;
+  if (hasPhotos) {
+    const response = await fetch(`/api/sessions/${id}/bundle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...desktopHeaders() },
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) throw new Error("导出截图失败，请重试");
+    blob = await response.blob();
+  } else {
+    blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  }
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = title.replace(/[\\/]/g, "_") + ".md";
+  link.download = title.replace(/[\\/]/g, "_") + (hasPhotos ? ".zip" : ".md");
   link.click();
   URL.revokeObjectURL(url);
   return { saved: true };
+}
+
+export async function takeScreenshot(sessionId: string, segmentId?: number) {
+  if (!window.parrotNative) throw new Error("请在 Parrot 桌面客户端中截图");
+  return window.parrotNative.request<{ captured: boolean }>("screenshot", {
+    sessionId,
+    ...(segmentId != null ? { segmentId } : {}),
+  });
 }
 
 export async function ensureCapturePermission() {

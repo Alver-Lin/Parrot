@@ -1,7 +1,10 @@
 import asyncio
 import io
+import struct
 import time
 import wave
+import zipfile
+import zlib
 
 import numpy as np
 import pytest
@@ -22,6 +25,14 @@ def wav_bytes(duration=1.3, rate=16000):
         audio.setparams((1, 2, rate, 0, "NONE", "not compressed"))
         audio.writeframes(pcm.tobytes())
     return output.getvalue()
+
+
+def png_bytes():
+    def chunk(kind, payload):
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 1, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\x00\x42\x63\xeb\xff\xff\xff")) + chunk(b"IEND", b""))
 
 
 def test_chunker_preserves_tail_and_context_without_missing_samples(tmp_path):
@@ -223,6 +234,109 @@ def test_existing_database_adds_markdown_column_without_losing_records(tmp_path)
 def test_invalid_settings(client):
     browser, _, _ = client
     assert browser.post("/api/sessions", json={"model": "invalid"}).status_code == 422
+
+
+def test_screenshot_is_inserted_at_capture_time_and_exports_with_photo_folder(client):
+    browser, store, _ = client
+    sid = store.create(Settings(title="截图课程"))
+    store.update(sid, status="completed", duration=20, processed=20)
+    store.add_segments(sid, [{"start": 0, "end": 3, "text": "截图前的文字", "review": False}])
+    image = png_bytes()
+    response = browser.post(f"/api/sessions/{sid}/screenshots?at=8.5", content=image,
+                            headers={"Content-Type": "image/png"})
+    assert response.status_code == 201
+    picture = response.json()["segments"][-1]
+    assert picture["kind"] == "image"
+    assert picture["start"] == picture["end"] == 8.5
+    filename = picture["photo_filename"]
+    store.add_segments(sid, [{"start": 5, "end": 7, "text": "稍后识别出的早期文字", "review": False},
+                             {"start": 10, "end": 12, "text": "截图后的文字", "review": False}])
+    session = browser.get(f"/api/sessions/{sid}").json()
+    assert [item["start"] for item in session["segments"]] == [0, 5, 8.5, 10]
+    exported = browser.get(f"/api/sessions/{sid}/markdown").text
+    link = f"![截图 00:00:08](photo/{filename})"
+    assert link in exported
+    assert exported.index("稍后识别出的早期文字") < exported.index(link) < exported.index("截图后的文字")
+    photo = browser.get(f"/api/sessions/{sid}/photo/{filename}")
+    assert photo.status_code == 200 and photo.content == image
+    assert photo.headers["content-type"] == "image/png"
+    edited = "# 手动编辑的标题\n\n自定义内容\n\n" + link
+    bundle = browser.post(f"/api/sessions/{sid}/bundle", json={"content": edited})
+    assert bundle.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(bundle.content)) as archive:
+        assert archive.read("截图课程/截图课程.md").decode() == edited
+        assert archive.read("截图课程/photo/" + filename) == image
+    other = store.create(Settings())
+    assert browser.get(f"/api/sessions/{other}/photo/{filename}").status_code == 404
+    assert browser.get(f"/api/sessions/{sid}/photo/not-a-photo.png").status_code == 404
+    assert browser.patch(f"/api/sessions/{sid}/segments/{picture['id']}", json={"text": "x"}).status_code == 400
+    assert Store(store.root).get(sid)["segments"][2]["photo_filename"] == filename
+    replacement = png_bytes()
+    replaced = browser.post(
+        f"/api/sessions/{sid}/segments/{picture['id']}/photo",
+        content=replacement,
+        headers={"Content-Type": "image/png"},
+    )
+    assert replaced.status_code == 200
+    updated = next(item for item in replaced.json()["segments"] if item["id"] == picture["id"])
+    assert updated["photo_filename"] != filename
+    assert updated["photo_filename"] in updated["text"]
+    assert not (store.root / sid / "photo" / filename).exists()
+    assert browser.get(f"/api/sessions/{sid}/photo/{updated['photo_filename']}").content == replacement
+    assert browser.delete(f"/api/sessions/{sid}/segments/{updated['id']}").status_code == 200
+    remaining = browser.get(f"/api/sessions/{sid}").json()
+    assert all(item["kind"] != "image" for item in remaining["segments"])
+    assert f"photo/{updated['photo_filename']}" not in browser.get(f"/api/sessions/{sid}/markdown").text
+    assert not (store.root / sid / "photo" / updated["photo_filename"]).exists()
+    text_id = remaining["segments"][0]["id"]
+    assert browser.delete(f"/api/sessions/{sid}/segments/{text_id}").status_code == 400
+    assert browser.delete(f"/api/sessions/{sid}").status_code == 200
+    assert not (store.root / sid).exists()
+
+
+def test_screenshot_appends_to_edited_markdown_and_survives_concurrent_save(client):
+    browser, store, _ = client
+    sid = store.create(Settings())
+    store.update(sid, duration=10)
+    baseline = "# 保留用户标题\n\n已经整理的笔记"
+    store.save_markdown(sid, baseline)
+    response = browser.post(f"/api/sessions/{sid}/screenshots?at=100", content=png_bytes(),
+                            headers={"Content-Type": "image/png"})
+    assert response.status_code == 201
+    session = response.json()
+    picture = session["segments"][0]
+    assert picture["start"] == 10
+    assert session["markdown_content"].startswith(baseline)
+    response = browser.patch(f"/api/sessions/{sid}/markdown",
+                             json={"content": baseline + "\n用户继续输入", "base_content": baseline})
+    assert response.status_code == 200
+    assert "用户继续输入" in response.json()["content"]
+    assert "photo/" + picture["photo_filename"] in response.json()["content"]
+
+
+@pytest.mark.parametrize("invalid", [b"not a PNG", png_bytes()[:30], png_bytes()[:-1] + b"x"])
+def test_invalid_screenshot_does_not_change_record_or_create_photos(client, invalid):
+    browser, store, _ = client
+    sid = store.create(Settings())
+    response = browser.post(f"/api/sessions/{sid}/screenshots", content=invalid,
+                            headers={"Content-Type": "image/png"})
+    assert response.status_code == 400
+    assert store.get(sid)["segments"] == []
+    assert not (store.root / sid / "photo").exists()
+
+
+def test_screenshot_upload_limits_and_missing_record(client, monkeypatch):
+    browser, store, _ = client
+    sid = store.create(Settings())
+    assert browser.post(f"/api/sessions/{sid}/screenshots", content=png_bytes()).status_code == 415
+    assert browser.post(f"/api/sessions/{sid}/screenshots?at=nan", content=png_bytes(),
+                        headers={"Content-Type": "image/png"}).status_code == 422
+    assert browser.post("/api/sessions/missing/screenshots", content=png_bytes(),
+                        headers={"Content-Type": "image/png"}).status_code == 404
+    monkeypatch.setattr(main, "MAX_SCREENSHOT_BYTES", 16)
+    assert browser.post(f"/api/sessions/{sid}/screenshots", content=png_bytes(),
+                        headers={"Content-Type": "image/png"}).status_code == 413
+    assert store.get(sid)["segments"] == []
 
 
 @pytest.mark.parametrize("engine,model", [("mlx", "large-v3"), ("mlx", "small"),

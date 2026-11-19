@@ -8,6 +8,8 @@ export interface Settings {
 }
 
 export interface Segment {
+  kind?: "text" | "image";
+  photo_filename?: string | null;
   id: number;
   start: number;
   end: number;
@@ -101,7 +103,8 @@ export function toMarkdown(session: Session) {
       .filter(Boolean)
       .join("\n");
     if (text) {
-      lines.push(`${segment.review ? "（待校对）" : ""}${text}`);
+      if (segment.kind === "image") lines.push("", text, "");
+      else lines.push(`${segment.review ? "（待校对）" : ""}${text}`);
     }
   }
   return lines.join("\n");

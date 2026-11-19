@@ -37,6 +37,11 @@ class Store:
             columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
             if "markdown_content" not in columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN markdown_content TEXT")
+            segment_columns = {row["name"] for row in db.execute("PRAGMA table_info(segments)")}
+            if "kind" not in segment_columns:
+                db.execute("ALTER TABLE segments ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'")
+            if "photo_filename" not in segment_columns:
+                db.execute("ALTER TABLE segments ADD COLUMN photo_filename TEXT")
             db.execute(
                 "UPDATE sessions SET status='interrupted', error=? "
                 "WHERE status IN ('preparing','recording','pausing','paused','resuming','transcribing','stopping')",
@@ -134,9 +139,120 @@ class Store:
     def edit(self, sid, segment_id, text):
         with self.connect() as db:
             return db.execute(
-                "UPDATE segments SET text=?,review=0 WHERE id=? AND session_id=?",
+                "UPDATE segments SET text=?,review=0 WHERE id=? AND session_id=? AND kind='text'",
                 (text, segment_id, sid),
             ).rowcount
+
+    def delete_segment(self, sid, segment_id):
+        photo = None
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT kind, photo_filename, text FROM segments WHERE id=? AND session_id=?",
+                (segment_id, sid),
+            ).fetchone()
+            if row is None:
+                return False
+            db.execute("DELETE FROM segments WHERE id=? AND session_id=?", (segment_id, sid))
+            if row["kind"] == "image" and row["photo_filename"]:
+                photo = row["photo_filename"]
+                markdown_row = db.execute(
+                    "SELECT markdown_content FROM sessions WHERE id=?", (sid,)
+                ).fetchone()
+                if markdown_row and markdown_row["markdown_content"] is not None:
+                    db.execute(
+                        "UPDATE sessions SET markdown_content=? WHERE id=?",
+                        (remove_photo_markdown(markdown_row["markdown_content"], photo), sid),
+                    )
+        if photo:
+            (self.root / sid / "photo" / photo).unlink(missing_ok=True)
+        return True
+
+    def replace_screenshot(self, sid, segment_id, data):
+        path = None
+        old_path = None
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT start, photo_filename FROM segments "
+                    "WHERE id=? AND session_id=? AND kind='image'",
+                    (segment_id, sid),
+                ).fetchone()
+                if row is None:
+                    return False
+                filename = uuid.uuid4().hex + ".png"
+                directory = self.root / sid / "photo"
+                directory.mkdir(parents=True, exist_ok=True)
+                path = directory / filename
+                path.write_bytes(data)
+                text = f"![截图 {timestamp(row['start'])}](photo/{filename})"
+                db.execute(
+                    "UPDATE segments SET text=?, original_text=?, photo_filename=? "
+                    "WHERE id=? AND session_id=? AND kind='image'",
+                    (text, text, filename, segment_id, sid),
+                )
+                markdown_row = db.execute(
+                    "SELECT markdown_content FROM sessions WHERE id=?", (sid,)
+                ).fetchone()
+                if markdown_row and markdown_row["markdown_content"] is not None and row["photo_filename"]:
+                    db.execute(
+                        "UPDATE sessions SET markdown_content=? WHERE id=?",
+                        (
+                            replace_photo_markdown(
+                                markdown_row["markdown_content"],
+                                row["photo_filename"],
+                                filename,
+                                text,
+                            ),
+                            sid,
+                        ),
+                    )
+                if row["photo_filename"] and row["photo_filename"] != filename:
+                    old_path = directory / row["photo_filename"]
+            if old_path:
+                old_path.unlink(missing_ok=True)
+            return True
+        except Exception:
+            if path:
+                path.unlink(missing_ok=True)
+            raise
+
+    def add_screenshot(self, sid, data, at=None):
+        path = None
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                session = db.execute("SELECT duration,markdown_content FROM sessions WHERE id=?", (sid,)).fetchone()
+                if session is None:
+                    return False
+                moment = min(max(0, at if at is not None else session["duration"]), session["duration"])
+                filename = uuid.uuid4().hex + ".png"
+                directory = self.root / sid / "photo"
+                directory.mkdir(parents=True, exist_ok=True)
+                path = directory / filename
+                path.write_bytes(data)
+                text = f"![截图 {timestamp(moment)}](photo/{filename})"
+                db.execute(
+                    "INSERT INTO segments(session_id,start,end,text,original_text,review,kind,photo_filename) "
+                    "VALUES(?,?,?,?,?,0,'image',?)", (sid, moment, moment, text, text, filename),
+                )
+                if session["markdown_content"] is not None:
+                    db.execute("UPDATE sessions SET markdown_content=? WHERE id=?",
+                               (append_markdown(session["markdown_content"], "\n\n" + text + "\n\n"), sid))
+            return True
+        except Exception:
+            if path:
+                path.unlink(missing_ok=True)
+            raise
+
+    def photo_path(self, sid, filename):
+        if not re.fullmatch(r"[a-f0-9]{32}\.png", filename):
+            return None
+        with self.connect() as db:
+            found = db.execute("SELECT 1 FROM segments WHERE session_id=? AND photo_filename=? AND kind='image'",
+                               (sid, filename)).fetchone()
+        path = self.root / sid / "photo" / filename
+        return path if found and path.is_file() else None
 
     def save_markdown(self, sid, content, base_content=None):
         with self.connect() as db:
@@ -197,9 +313,29 @@ def append_markdown(content, added):
     return content + separator + added
 
 
+def remove_photo_markdown(content, filename):
+    pattern = re.compile(
+        rf"(?:\n[ \t]*)*!\[[^\]]*\]\(photo/{re.escape(filename)}\)(?:[ \t]*\n)*"
+    )
+    updated = pattern.sub("\n\n", content)
+    updated = re.sub(r"\n{3,}", "\n\n", updated)
+    if content.endswith("\n") and not updated.endswith("\n"):
+        updated += "\n"
+    return updated
+
+
+def replace_photo_markdown(content, old_filename, new_filename, text):
+    pattern = re.compile(rf"!\[[^\]]*\]\(photo/{re.escape(old_filename)}\)")
+    if pattern.search(content):
+        return pattern.sub(text, content, count=1)
+    return append_markdown(content, "\n\n" + text + "\n\n")
+
+
 def segment_markdown(segment):
     text = "\n".join(line.strip() for line in segment["text"].replace("\r\n", "\n")
                      .replace("\r", "\n").split("\n") if line.strip())
+    if segment.get("kind") == "image" and text:
+        return "\n" + text + "\n"
     return ("（待校对）" if segment["review"] else "") + text if text else ""
 
 
