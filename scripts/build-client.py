@@ -51,9 +51,12 @@ def build(app, identity, python):
         "Security",
         "-framework",
         "LocalAuthentication",
-        "-F/System/Library/PrivateFrameworks",
-        "-framework",
-        "SkyLight",
+        # Resolve CGS/SkyLight symbols at runtime. Linking PrivateFrameworks via -F
+        # makes WebKit pick a private Network.framework and break the current CLT SDK.
+        "-Xlinker",
+        "-undefined",
+        "-Xlinker",
+        "dynamic_lookup",
         ROOT / "native/ParrotDesktop.swift",
         ROOT / "native/PolishSettings.swift",
         "-o",

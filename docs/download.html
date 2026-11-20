@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>下载 Parrot · macOS</title>
+  <style>
+    :root {
+      --ink: #1c2433;
+      --muted: #5b6b84;
+      --line: #d9e0ec;
+      --panel: #f7f9fc;
+      --accent: #2f6fed;
+      --ok: #1f7a3f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #e8f0ff 0%, transparent 55%),
+        radial-gradient(900px 420px at 100% 0%, #eef7f1 0%, transparent 50%),
+        #fff;
+      line-height: 1.55;
+    }
+    main {
+      width: min(720px, calc(100% - 32px));
+      margin: 48px auto 72px;
+    }
+    .brand {
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 10px;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(28px, 5vw, 40px);
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+    .lead { margin: 0 0 28px; color: var(--muted); font-size: 16px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px 16px; color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #e8f6ee;
+      color: var(--ok);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 44px;
+      padding: 0 18px;
+      border-radius: 12px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 600;
+      border: 0;
+      cursor: pointer;
+    }
+    .cta[aria-disabled="true"] { opacity: 0.55; pointer-events: none; }
+    .cta.secondary {
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      margin-left: 8px;
+    }
+    ol { margin: 0; padding-left: 18px; }
+    li { margin: 8px 0; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.92em;
+      background: #eef2f8;
+      padding: 1px 6px;
+      border-radius: 6px;
+    }
+    .warn {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: #fff7e8;
+      border: 1px solid #f0d9a8;
+      color: #7a4d00;
+      font-size: 13px;
+    }
+    .foot { margin-top: 22px; color: var(--muted); font-size: 13px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Parrot</p>
+    <h1>下载 macOS 安装包</h1>
+    <p class="lead">安装到「应用程序」。升级同一安装包时会先退出并移除旧版 <code>Parrot.app</code>，个人数据保留在本机应用支持目录。</p>
+
+    <section class="card" aria-labelledby="download-title">
+      <h2 id="download-title" style="margin:0 0 8px;font-size:18px;">Parrot v1.0.0</h2>
+      <div class="meta">
+        <span class="badge" id="platform-badge">检测中…</span>
+        <span>格式：<code>.pkg</code></span>
+        <span>系统：macOS 13+</span>
+        <span id="arch-label">架构：Apple Silicon</span>
+      </div>
+      <div>
+        <a class="cta" id="download-btn" href="https://github.com/Alver-Lin/Parrot/releases/latest" aria-disabled="true">正在获取下载链接…</a>
+        <a class="cta secondary" href="https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.0">打开 Release 页面</a>
+      </div>
+      <p class="warn" id="gatekeeper-note">
+        当前发行包使用开发签名、未经 Apple 公证。若系统提示无法打开：打开「系统设置 → 隐私与安全性」允许仍要打开，或按住 Control 点击安装包后选择「打开」。
+      </p>
+    </section>
+
+    <section class="card" aria-labelledby="steps-title">
+      <h2 id="steps-title" style="margin:0 0 8px;font-size:18px;">安装引导</h2>
+      <ol>
+        <li>点击上方按钮下载 <code>Parrot-1.0.0-arm64.pkg</code>（Intel Mac 需对应架构包）。</li>
+        <li>双击打开安装包，按安装器提示继续；需要管理员密码以写入「应用程序」。</li>
+        <li>升级时安装器会先退出旧版并删除 <code>/Applications/Parrot.app</code>，再写入新版本。</li>
+        <li>安装完成后从「启动台」或「应用程序」打开 Parrot；首次使用需授权麦克风 / 系统音频。</li>
+        <li>识别模型首次使用时在设置中下载；数据保存在 <code>~/Library/Application Support/Parrot</code>。</li>
+      </ol>
+    </section>
+
+    <p class="foot">
+      仓库：<a href="https://github.com/Alver-Lin/Parrot">Alver-Lin/Parrot</a>
+      · 本页也可从仓库 <code>docs/download.html</code> 打开。
+    </p>
+  </main>
+  <script>
+    (function () {
+      var releaseApi = "https://api.github.com/repos/Alver-Lin/Parrot/releases/tags/v1.0.0";
+      var fallback = "https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.0";
+      var btn = document.getElementById("download-btn");
+      var badge = document.getElementById("platform-badge");
+      var archLabel = document.getElementById("arch-label");
+      var ua = navigator.userAgent || "";
+      var isMac = /Mac|Macintosh/.test(ua);
+      var arch = "arm64";
+      if (/Intel/.test(ua)) arch = "x86_64";
+      badge.textContent = isMac ? "已检测到 macOS" : "请在 Mac 上下载安装";
+      archLabel.textContent = "架构偏好：" + (arch === "arm64" ? "Apple Silicon (arm64)" : "Intel (x86_64)");
+
+      function pickAsset(assets) {
+        if (!assets || !assets.length) return null;
+        var preferred = "Parrot-1.0.0-" + arch + ".pkg";
+        var exact = assets.find(function (a) { return a.name === preferred; });
+        if (exact) return exact;
+        return assets.find(function (a) { return /\.pkg$/i.test(a.name); }) || null;
+      }
+
+      fetch(releaseApi)
+        .then(function (r) { if (!r.ok) throw new Error("release missing"); return r.json(); })
+        .then(function (data) {
+          var asset = pickAsset(data.assets || []);
+          if (!asset) throw new Error("no pkg");
+          btn.href = asset.browser_download_url;
+          btn.textContent = "下载 " + asset.name;
+          btn.setAttribute("aria-disabled", "false");
+        })
+        .catch(function () {
+          btn.href = fallback;
+          btn.textContent = "前往 GitHub Release 下载";
+          btn.setAttribute("aria-disabled", "false");
+        });
+    })();
+  </script>
+</body>
+</html>

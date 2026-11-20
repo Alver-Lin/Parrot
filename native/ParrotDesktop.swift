@@ -735,14 +735,23 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
         workspace.contentView = webView
     }
 
+    /// Absolute path for local builds, or a path relative to Contents/Resources for release packages.
+    func resolvePythonExecutable() -> String {
+        if let env = ProcessInfo.processInfo.environment["PARROT_PYTHON"], !env.isEmpty { return env }
+        let configured = Bundle.main.object(forInfoDictionaryKey: "ParrotPythonExecutable") as? String ?? ""
+        if configured.isEmpty { return "" }
+        if configured.hasPrefix("/") { return configured }
+        guard let resources = Bundle.main.resourceURL else { return configured }
+        return resources.appendingPathComponent(configured).path
+    }
+
     func startBackend() throws {
         port = try unusedPort()
         guard let resources = Bundle.main.resourceURL,
               let executable = Bundle.main.executableURL else { throw appError("客户端资源缺失，请重新构建。") }
-        let pythonPath = ProcessInfo.processInfo.environment["PARROT_PYTHON"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "ParrotPythonExecutable") as? String ?? ""
+        let pythonPath = resolvePythonExecutable()
         guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
-            throw appError("未找到 Python 运行环境。请在项目目录运行 bash scripts/setup.sh 后重新构建客户端。")
+            throw appError("未找到 Python 运行环境。请重新安装 Parrot，或在项目目录运行 bash scripts/setup.sh 后重新构建客户端。")
         }
         let runtime = resources.appendingPathComponent("runtime")
         let process = Process()

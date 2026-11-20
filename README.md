@@ -49,13 +49,23 @@ Markdown 创建时间、历史列表日期和新记录标题日期统一按北�
 
 1.0 不提供音频/视频文件导入、原始录音保存或回听。旧版本已生成的录音文件不会自动删除，也不通过客户端提供访问。自动截图与独立复习卡片尚未实现；AI 润色可按内容生成学习笔记与章节。
 
-## 安装与构建
+## 下载安装（推荐）
 
-当前为 **macOS 本机客户端构建**，依赖项目现有的 Python 环境与数据目录。应用包尚未捆绑 Python 解释器、全部识别依赖和模型，也未制作供其他电脑直接安装的签名、公证发行包。可以在本机移动或复制 `.app`，但请保留构建时引用的项目 Python 环境与数据目录。
+macOS 13+ 可直接安装发行包（当前提供 Apple Silicon / arm64）：
+
+1. 打开引导页：[docs/download.html](docs/download.html)，或前往 [GitHub Releases](https://github.com/Alver-Lin/Parrot/releases/latest)。
+2. 下载 `Parrot-1.0.0-arm64.pkg`，双击按提示安装到「应用程序」。
+3. 再次安装更高版本时，安装器会先退出并移除旧的 `/Applications/Parrot.app`，再写入新版本；`~/Library/Application Support/Parrot` 中的个人数据会保留。
+
+若系统提示无法打开未公证的安装包：打开「系统设置 → 隐私与安全性」允许仍要打开，或按住 Control 点击 `.pkg` 后选择「打开」。
+
+## 安装与构建（开发）
+
+当前开发构建依赖项目现有的 Python 环境与数据目录。对外分发请使用 `scripts/build-release.py` 生成捆绑 Python 的 `.pkg`。
 
 需要 macOS 13+、Xcode Command Line Tools、Python 3.9+（建议 3.11/3.12），以及满足 Vite 要求的 Node.js 20.19 系列或 22.12 以上版本。
 
-首次安装：
+首次安装开发环境：
 
 ```bash
 bash scripts/setup.sh
@@ -78,6 +88,15 @@ cd ..
 ```
 
 `scripts/build-client.py` 编译原生窗口和声音采集组件，复制后端与前端资源，生成应用图标，使用固定证书分别签名采集组件和主应用。输出位于 `dist/Parrot.app`，用户数据不写入应用包。
+
+制作可安装的发行包（捆绑 Python，安装到 `/Applications`，升级时卸载旧版应用）：
+
+```bash
+cd frontend && npm run build && cd ..
+PARROT_VERSION=1.0.0 .venv/bin/python scripts/build-release.py
+```
+
+产物位于 `dist/release/Parrot-1.0.0-<arch>.pkg`。用户数据目录为 `~/Library/Application Support/Parrot`，不会写入应用包。
 
 本机已有旧项目时，先运行 `.venv/bin/python scripts/setup-signing.py` 初始化一次签名身份。不要删除 `.data/signing/` 或将其中的密钥、密码提交到版本库。构建失败会保留原应用，不会自动降级为临时签名。
 

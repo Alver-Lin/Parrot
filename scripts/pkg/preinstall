@@ -1,0 +1,23 @@
+#!/bin/bash
+# Remove previous Parrot.app installs before writing the new payload.
+set -euo pipefail
+
+quit_parrot() {
+  /usr/bin/osascript -e 'tell application "System Events" to (name of processes) contains "Parrot"' 2>/dev/null \
+    | grep -qi true || return 0
+  /usr/bin/osascript -e 'tell application "Parrot" to quit' 2>/dev/null || true
+  sleep 1
+  /usr/bin/pkill -x Parrot 2>/dev/null || true
+  /usr/bin/pkill -f '/Applications/Parrot.app/Contents/MacOS/Parrot' 2>/dev/null || true
+  sleep 1
+}
+
+quit_parrot
+
+# Always replace the previous application bundle. User data in
+# ~/Library/Application Support/Parrot is preserved across upgrades.
+if [ -d "/Applications/Parrot.app" ]; then
+  /bin/rm -rf "/Applications/Parrot.app"
+fi
+
+exit 0
