@@ -526,7 +526,8 @@ button:focus-visible {
   gap: 4px;
 }
 .markdown-view-switch {
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: repeat(2, 1fr);
   align-items: center;
   gap: 2px;
   padding: 2px;
@@ -765,13 +766,17 @@ button:focus-visible {
   line-height: 1.8;
   margin: 6px 0 0;
 }
-.model-preparation {
+.recognition-status {
+  display: grid;
+  gap: 16px;
+  border-top: 1px solid #eef1f7;
+  padding-top: 15px;
+}
+.readiness-row {
   display: flex;
   gap: 15px;
   justify-content: space-between;
   align-items: center;
-  border-top: 1px solid #eef1f7;
-  padding-top: 15px;
 }
 .setting-toggle {
   display: flex;
@@ -787,23 +792,47 @@ button:focus-visible {
 .setting-toggle .ant-switch {
   flex-shrink: 0;
 }
-.model-preparation strong {
+.readiness-copy {
+  min-width: 0;
+}
+.readiness-row strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 11px;
   color: #7686a1;
   font-weight: 500;
 }
-.model-preparation.is-downloaded strong {
+.readiness-row.is-ready strong {
   color: #389e0d;
 }
-.model-preparation p {
+.readiness-row.is-error strong {
+  color: #cf1322;
+}
+.status-dot {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #52c41a;
+}
+.status-cross {
+  color: #f5222d;
+  font-size: 12px;
+}
+.status-pending {
+  color: #8292af;
+}
+.readiness-row p {
   font-size: 9px;
   color: #a4afc2;
   margin: 5px 0 0;
   line-height: 1.8;
 }
-.model-preparation .ant-btn {
+.readiness-action.ant-btn {
   font-size: 10px;
   flex-shrink: 0;
+  padding-inline: 0;
 }
 .model-error {
   margin-top: 14px;

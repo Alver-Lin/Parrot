@@ -80,6 +80,16 @@ export async function ensureCapturePermission(source: AudioSource) {
   return window.parrotNative.request<{ granted: boolean; source: AudioSource }>("capturePermission", { source });
 }
 
+export interface CapturePermissions {
+  microphone: boolean;
+  system: boolean;
+}
+
+export async function readCapturePermissions(): Promise<CapturePermissions | null> {
+  if (!window.parrotNative) return null;
+  return window.parrotNative.request<CapturePermissions>("capturePermissionStatus");
+}
+
 export async function openCaptureSettings(source: AudioSource = "system") {
   await window.parrotNative?.request("openCaptureSettings", { source });
 }

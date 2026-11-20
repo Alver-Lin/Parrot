@@ -516,6 +516,10 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     var autoScrollForTest = true
     var audioSourceForTest = "system"
     var permissionSourcesForTest: [String] = []
+    var systemPermissionForTest = false
+    var microphonePermissionForTest = false
+    var grantPermissionForTest = true
+    var openedPrivacySourcesForTest: [String] = []
     var screenshotInProgress = false
     var screenshotProcess: Process?
     var activity: NSObjectProtocol?
@@ -886,7 +890,13 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     func requestAudioPermission(source: String, replyID: String?) async {
         if selfTesting {
             permissionSourcesForTest.append(source)
-            reply(replyID, value: ["granted": true, "source": source]); return
+            if grantPermissionForTest {
+                if source != "system" { microphonePermissionForTest = true }
+                if source != "microphone" { systemPermissionForTest = true }
+            }
+            let missingSource = source != "system" && !microphonePermissionForTest ? "microphone" : "system"
+            let resultSource = grantPermissionForTest ? (source == "microphone" ? "microphone" : "system") : missingSource
+            reply(replyID, value: ["granted": grantPermissionForTest, "source": resultSource]); return
         }
         if source != "system" {
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
@@ -940,15 +950,23 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             }
             reply(id, value: ["enabled": defaults.object(forKey: "autoScroll") as? Bool ?? true])
         case "capturePermission":
-            // Only a direct Start action requests access. Do not prompt on launch
-            // or from the once-per-second status poll.
+            // Only a direct Start or authorization action requests access.
             let source = body["source"] as? String ?? "system"
             guard ["microphone", "system", "mixed"].contains(source) else {
                 reply(id, error: "音频来源无效"); return
             }
             Task { await requestAudioPermission(source: source, replyID: id) }
+        case "capturePermissionStatus":
+            // Reading settings must never trigger a privacy prompt.
+            reply(id, value: [
+                "microphone": selfTesting ? microphonePermissionForTest
+                    : AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+                "system": selfTesting ? systemPermissionForTest : CGPreflightScreenCaptureAccess(),
+            ])
         case "openCaptureSettings":
-            if !selfTesting { openAudioPrivacySettings(source: body["source"] as? String ?? "system") }
+            let source = body["source"] as? String ?? "system"
+            if selfTesting { openedPrivacySourcesForTest.append(source) }
+            else { openAudioPrivacySettings(source: source) }
             reply(id, value: ["opened": true])
         case "collapse": hideWorkspace(animated: !selfTesting)
         case "state":
@@ -1415,6 +1433,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             try await Task.sleep(nanoseconds: 300_000_000)
             let unauthorized = try await URLSession.shared.data(from: baseURL.appendingPathComponent("api/status"))
             guard (unauthorized.1 as? HTTPURLResponse)?.statusCode == 403 else { throw appError("语音接口缺少客户端鉴权") }
+            let permissionRequestsBeforeSettings = permissionSourcesForTest.count
             openSettings()
             try await Task.sleep(nanoseconds: 300_000_000)
             let settingsVisible = try await webView.evaluateJavaScript("!!document.querySelector('.ant-modal-content')") as? Bool
@@ -1438,6 +1457,46 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               return true;
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
             guard audioSourcesWork == true else { throw appError("音频来源三选项未正确展示或保存") }
+            guard permissionSourcesForTest.count == permissionRequestsBeforeSettings
+                else { throw appError("查看授权状态不应自动请求权限") }
+            grantPermissionForTest = false
+            let microphonePermissionAction = try await webView.callAsyncJavaScript("""
+              await new Promise(resolve => setTimeout(resolve, 1300));
+              const row = document.querySelector('.permission-status');
+              if (!row?.querySelector('.status-cross') || row.querySelector('.status-dot')
+                || !row.textContent.includes('缺少麦克风权限')) return false;
+              row.querySelector('button').click();
+              await new Promise(resolve => setTimeout(resolve, 300));
+              return row.textContent.includes('程序未授权');
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard microphonePermissionAction == true, openedPrivacySourcesForTest.last == "microphone"
+                else { throw appError("麦克风未授权时应显示红叉并前往麦克风授权") }
+            if let image = try? await webView.takeSnapshot(configuration: nil),
+               let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+               let png = bitmap.representation(using: .png, properties: [:]) {
+                try png.write(to: selfTestDirectory.appendingPathComponent("desktop-settings-unready.png"))
+            }
+            microphonePermissionForTest = true
+            systemPermissionForTest = false
+            let systemPermissionAction = try await webView.callAsyncJavaScript("""
+              await new Promise(resolve => setTimeout(resolve, 1300));
+              const row = document.querySelector('.permission-status');
+              if (!row?.textContent.includes('缺少本机音频权限')) return false;
+              row.querySelector('button').click();
+              await new Promise(resolve => setTimeout(resolve, 300));
+              return !!row.querySelector('.status-cross');
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard systemPermissionAction == true, openedPrivacySourcesForTest.last == "system"
+                else { throw appError("本机音频未授权时应前往系统声音授权") }
+            grantPermissionForTest = true
+            let permissionReady = try await webView.callAsyncJavaScript("""
+              const row = document.querySelector('.permission-status');
+              row.querySelector('button').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              return row.textContent.includes('程序已授权') && !!row.querySelector('.status-dot')
+                && !row.querySelector('.status-cross') && !row.querySelector('button');
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard permissionReady == true else { throw appError("双声源所需权限全部开启后应显示绿色圆圈") }
             try await Task.sleep(nanoseconds: 500_000_000)
             if let image = try? await webView.takeSnapshot(configuration: nil),
                let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
@@ -1446,23 +1505,54 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             }
             let downloadedModelStatus = try await webView.callAsyncJavaScript("""
               const originalFetch = window.fetch;
+              let phase = 'missing';
+              let downloadRequests = 0;
+              let requestedSettings;
               window.fetch = async (input, options) => {
+                const path = new URL(String(input), location.href).pathname;
+                if (path === '/api/model/prepare' && options?.method === 'POST') {
+                  downloadRequests++;
+                  requestedSettings = JSON.parse(options.body);
+                  phase = 'loading';
+                  return new Response(JSON.stringify({message:'fixture'}), {status:202, headers:{'Content-Type':'application/json'}});
+                }
                 const response = await originalFetch(input, options);
-                if (new URL(String(input), location.href).pathname !== '/api/status') return response;
+                if (path !== '/api/status') return response;
                 const body = await response.json();
-                body.model = {status:'idle', message:'', engine:null, model:null};
-                body.model_cache.downloaded[body.model_cache.auto_engine]['large-v3'] = true;
+                body.model = {status:phase === 'loading' ? 'loading' : phase === 'failed' ? 'error' : 'idle',
+                  message:phase === 'failed' ? '模型下载测试失败' : '', engine:body.model_cache.auto_engine, model:'large-v3'};
+                body.model_cache.downloaded[body.model_cache.auto_engine]['large-v3'] = phase === 'downloaded';
                 return new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
               };
+              async function waitFor(predicate) {
+                for (let i = 0; i < 40; i++) {
+                  if (predicate()) return true;
+                  await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                return false;
+              }
               try {
-                await new Promise(resolve => setTimeout(resolve, 1800));
+                await new Promise(resolve => setTimeout(resolve, 1300));
                 const section = document.querySelector('.model-preparation');
-                return !!section && section.textContent.includes('模型已下载') && !section.querySelector('button');
+                if (!section?.querySelector('.status-cross') || !section.querySelector('button')
+                  || section.querySelector('.status-dot')) return false;
+                section.querySelector('button').click();
+                if (!await waitFor(() => downloadRequests === 1 && section.textContent.includes('模型下载中')
+                  && section.querySelector('button')?.disabled)) return false;
+                if (requestedSettings.model !== 'large-v3' || requestedSettings.engine !== 'auto') return false;
+                phase = 'failed';
+                if (!await waitFor(() => section.textContent.includes('模型下载失败')
+                  && !!section.querySelector('.status-cross') && !section.querySelector('button')?.disabled)) return false;
+                section.querySelector('button').click();
+                if (!await waitFor(() => downloadRequests === 2)) return false;
+                phase = 'downloaded';
+                return await waitFor(() => section.textContent.includes('模型已下载')
+                  && !!section.querySelector('.status-dot') && !section.querySelector('.status-cross') && !section.querySelector('button'));
               } finally {
                 window.fetch = originalFetch;
               }
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
-            guard downloadedModelStatus == true else { throw appError("已下载模型应显示已下载状态，并隐藏下载或加载按钮") }
+            guard downloadedModelStatus == true else { throw appError("模型状态、下载入口、失败重试或绿色成功圆圈未正确展示") }
             let autoScrollWorks = try await webView.callAsyncJavaScript("""
               const toggle = document.querySelector('#auto-scroll-switch');
               if (!toggle || toggle.getAttribute('aria-checked') !== 'true') return false;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { Modal, message, theme } from "ant-design-vue";
 import zhCN from "ant-design-vue/es/locale/zh_CN";
 import TranscriptPhoto from "./TranscriptPhoto.vue";
@@ -51,6 +51,8 @@ import {
   saveAutoScroll,
   loadAudioSource,
   saveAudioSource,
+  readCapturePermissions,
+  type CapturePermissions,
   updateOrb,
 } from "./desktop";
 
@@ -89,6 +91,11 @@ const networkError = ref("");
 const helpOpen = ref(false);
 const capturePermissionDenied = ref<AudioSource | null>(null);
 const audioSourceLoading = ref(true);
+const capturePermissions = ref<CapturePermissions | null>(null);
+const permissionCheckFailed = ref(false);
+const authorizationPending = ref(false);
+const modelRequestPending = ref(false);
+let permissionRefresh: Promise<void> | undefined;
 const transcript = ref<HTMLElement>();
 const autoScroll = ref(true);
 const autoScrollLoading = ref(true);
@@ -99,7 +106,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 let selectionRevision = 0;
 const activeStates = ["preparing", "recording", "pausing", "paused", "resuming", "stopping"];
-const busy = computed(() => !!status.value?.active_id || pending.value || audioSourceLoading.value);
+const busy = computed(() => !!status.value?.active_id || pending.value || audioSourceLoading.value || authorizationPending.value);
 const modelLoading = computed(() => status.value?.model.status === "loading");
 const currentActive = computed(
   () => !!selected.value && activeStates.includes(selected.value.status),
@@ -225,6 +232,25 @@ const audioSourceOptions = [
   { value: "system", label: "识别本机音频" },
   { value: "mixed", label: "识别麦克风与本机音频" },
 ];
+const missingPermissions = computed(() => {
+  if (!capturePermissions.value) return [];
+  const missing: { source: AudioSource; label: string }[] = [];
+  if (settings.audio_source !== "system" && !capturePermissions.value.microphone)
+    missing.push({ source: "microphone", label: "麦克风" });
+  if (settings.audio_source !== "microphone" && !capturePermissions.value.system)
+    missing.push({ source: "system", label: "本机音频" });
+  return missing;
+});
+const authorizationReady = computed(() => !!capturePermissions.value && !missingPermissions.value.length);
+const authorizationLabel = computed(() => permissionCheckFailed.value ? "授权状态获取失败"
+  : !isDesktop ? "授权状态待确认"
+    : !capturePermissions.value ? "正在检查授权状态"
+      : authorizationReady.value ? "程序已授权" : "程序未授权");
+const authorizationDescription = computed(() => !isDesktop ? "请在 Parrot 桌面客户端查看授权状态。"
+  : permissionCheckFailed.value ? "暂时无法检查权限，请点击重试。"
+    : !capturePermissions.value ? "正在检查当前音频来源所需权限。"
+      : authorizationReady.value ? "当前音频来源所需权限已开启。"
+        : `缺少${missingPermissions.value.map(item => item.label).join("、")}权限，点击前往授权。`);
 const selectedEngine = computed(() => settings.engine === "auto"
   ? status.value?.model_cache.auto_engine : settings.engine);
 const selectedModelDownloaded = computed(() => !!selectedEngine.value &&
@@ -246,6 +272,7 @@ function dateLabel(value: string) {
 }
 
 async function refresh() {
+  if (settingsOpen.value) void refreshCapturePermissions();
   try {
     const [health, history] = await Promise.all([
       api<Status>("/status"),
@@ -446,17 +473,24 @@ async function togglePause() {
 }
 
 async function prepareModel() {
+  if (busy.value || modelLoading.value || modelRequestPending.value) return;
+  modelRequestPending.value = true;
   pending.value = true;
   try {
     await api("/model/prepare", {
       method: "POST",
       body: JSON.stringify(options()),
     });
+    if (status.value) status.value.model = {
+      status: "loading", message: "正在下载所选模型，请稍等片刻。",
+      engine: selectedEngine.value ?? null, model: settings.model,
+    };
     message.info("开始下载模型，请保持网络连接");
   } catch (error) {
     showError(error);
   } finally {
     pending.value = false;
+    modelRequestPending.value = false;
   }
 }
 
@@ -524,6 +558,53 @@ async function exportMarkdown() {
 function openSettings() {
   settingsOpen.value = true;
 }
+
+function refreshCapturePermissions(): Promise<void> {
+  if (permissionRefresh) return permissionRefresh;
+  permissionRefresh = (async () => {
+    try {
+      const permissions = await readCapturePermissions();
+      if (!disposed) {
+        capturePermissions.value = permissions;
+        permissionCheckFailed.value = false;
+      }
+    } catch {
+      if (!disposed) {
+        capturePermissions.value = null;
+        permissionCheckFailed.value = true;
+      }
+    } finally {
+      permissionRefresh = undefined;
+    }
+  })();
+  return permissionRefresh;
+}
+
+async function authorizeFromSettings() {
+  if (authorizationPending.value || !isDesktop) return;
+  authorizationPending.value = true;
+  try {
+    const permission = await ensureCapturePermission(settings.audio_source);
+    // A status read started before the permission dialog may still be in flight.
+    await permissionRefresh;
+    await refreshCapturePermissions();
+    if (!permission.granted) await openCaptureSettings(permission.source);
+    else if (missingPermissions.value[0]) await openCaptureSettings(missingPermissions.value[0].source);
+    if (authorizationReady.value) capturePermissionDenied.value = null;
+  } catch (error) {
+    showError(error);
+  } finally {
+    authorizationPending.value = false;
+  }
+}
+
+function refreshPermissionsOnFocus() {
+  if (settingsOpen.value) void refreshCapturePermissions();
+}
+
+watch([settingsOpen, () => settings.audio_source], ([open]) => {
+  if (open) void refreshCapturePermissions();
+});
 
 async function refreshSessionAfterPhotoChange(sessionId: string, revision: number, scroll = false) {
   const detail = await api<Session>(`/sessions/${sessionId}`);
@@ -612,6 +693,7 @@ async function changeAudioSource(source: AudioSource) {
 
 onMounted(async () => {
   window.addEventListener("parrot-open-settings", openSettings);
+  window.addEventListener("focus", refreshPermissionsOnFocus);
   void refresh();
   try {
     settings.audio_source = await loadAudioSource();
@@ -630,6 +712,7 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   window.removeEventListener("parrot-open-settings", openSettings);
+  window.removeEventListener("focus", refreshPermissionsOnFocus);
   disposed = true;
   clearTimeout(timer);
   for (const id of markdownTimers.keys()) void saveMarkdownDraft(id);
@@ -1114,7 +1197,6 @@ onUnmounted(() => {
               :disabled="busy || modelLoading || audioSourceLoading"
               @change="changeAudioSource"
             />
-            <p class="field-help">新记录使用此来源；续写历史记录沿用原来源。双声源模式建议戴耳机，避免重复收音。</p>
           </a-form-item>
           <div class="settings-pair">
             <a-form-item label="音频语言"
@@ -1143,19 +1225,52 @@ onUnmounted(() => {
             :checked="autoScroll" :loading="autoScrollLoading" :disabled="autoScrollLoading"
             @change="changeAutoScroll" />
         </div>
-        <div v-if="status?.model_cache" class="model-preparation"
-          :class="{ 'is-downloaded': selectedModelDownloaded }">
-          <div>
-            <strong><CheckOutlined v-if="selectedModelDownloaded" /> {{ modelLabel }}</strong>
-            <p>{{ selectedModelDownloaded ? '开始转写时自动载入，无需重复下载。' : '首次使用前下载所选模型，完成后会保存在本地。' }}</p>
+        <div class="recognition-status" aria-label="程序状态">
+          <div class="readiness-row permission-status"
+            :class="{ 'is-ready': authorizationReady, 'is-error': permissionCheckFailed || (capturePermissions && !authorizationReady) }"
+            role="status">
+            <div class="readiness-copy">
+              <strong>
+                <span v-if="authorizationReady" class="status-dot" aria-hidden="true"></span>
+                <CloseOutlined v-else-if="permissionCheckFailed || capturePermissions" class="status-cross" />
+                <LoadingOutlined v-else-if="isDesktop" class="status-pending" />
+                <InfoCircleOutlined v-else class="status-pending" />
+                {{ authorizationLabel }}
+              </strong>
+              <p>{{ authorizationDescription }}</p>
+            </div>
+            <a-button v-if="capturePermissions && !authorizationReady"
+              type="link" class="readiness-action" :loading="authorizationPending"
+              :disabled="authorizationPending || audioSourceLoading"
+              @click="authorizeFromSettings">前往授权</a-button>
+            <a-button v-else-if="permissionCheckFailed" type="link" class="readiness-action"
+              @click="refreshCapturePermissions">重试</a-button>
           </div>
-          <a-button
-            v-if="!selectedModelDownloaded"
-            :disabled="!connected || busy || modelLoading"
-            :loading="modelLoading"
-            @click="prepareModel"
-            ><CloudDownloadOutlined /> 下载模型</a-button
-          >
+          <div v-if="status?.model_cache" class="readiness-row model-preparation"
+            :class="{ 'is-ready': selectedModelDownloaded, 'is-error': !selectedModelDownloaded && !modelLoading }"
+            role="status">
+            <div class="readiness-copy">
+              <strong>
+                <span v-if="selectedModelDownloaded" class="status-dot" aria-hidden="true"></span>
+                <LoadingOutlined v-else-if="modelLoading || modelRequestPending" class="status-pending" />
+                <CloseOutlined v-else class="status-cross" />
+                {{ modelLabel }}
+              </strong>
+              <p>{{ selectedModelDownloaded ? '开始转写时自动载入，无需重复下载。' : modelLoading ? '正在下载所选模型，请保持网络连接。' : '点击下载所选模型，完成后会保存在本地。' }}</p>
+            </div>
+            <a-button
+              v-if="!selectedModelDownloaded"
+              type="link" class="readiness-action"
+              :disabled="!connected || busy || modelLoading || modelRequestPending"
+              :loading="modelLoading || modelRequestPending"
+              @click="prepareModel"
+              ><CloudDownloadOutlined /> {{ modelLoading ? '下载中' : '下载模型' }}</a-button>
+          </div>
+          <div v-else class="readiness-row" role="status">
+            <div class="readiness-copy">
+              <strong><LoadingOutlined class="status-pending" /> 正在检查模型状态</strong>
+            </div>
+          </div>
         </div>
         <a-alert
           v-if="selectedModelMatches && status?.model.status === 'error'"
