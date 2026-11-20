@@ -237,6 +237,74 @@ def test_invalid_settings(client):
     assert browser.post("/api/sessions", json={"audio_source": "invalid"}).status_code == 422
 
 
+def test_polish_apply_undo_preserves_original_transcript_photos_and_export(client):
+    browser, store, _ = client
+    sid = store.create(Settings(title="AI 润色验证"))
+    store.update(sid, status="completed", duration=12, processed=12)
+    store.add_segments(sid, [{"start": 0, "end": 3, "text": "这个就是前面的内容。", "review": False}])
+    image = png_bytes()
+    uploaded = browser.post(f"/api/sessions/{sid}/screenshots?at=4", content=image,
+                            headers={"Content-Type": "image/png"})
+    assert uploaded.status_code == 201
+    picture = uploaded.json()["segments"][-1]
+    store.add_segments(sid, [{"start": 6, "end": 9, "text": "然后这个就是后面的内容。", "review": False}])
+    before = store.get(sid)
+    original = browser.get(f"/api/sessions/{sid}/markdown").text
+    polished = original.replace("这个就是前面的内容。", "这是前面的内容。").replace("然后这个就是后面的内容。", "这是后面的内容。")
+    applied = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": polished, "base_content": original})
+    assert applied.status_code == 200
+    revision = applied.json()["polish_revision"]
+    assert revision and applied.json()["markdown_content"] == polished
+    assert applied.json()["segments"] == before["segments"]
+    assert browser.get(f"/api/sessions/{sid}/markdown").text == polished
+    filename = picture["photo_filename"]
+    assert browser.get(f"/api/sessions/{sid}/photo/{filename}").content == image
+    assert Store(store.root).get(sid)["polish_revision"] == revision
+    undone = browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": polished})
+    assert undone.status_code == 200 and undone.json()["markdown_content"] == original
+    assert undone.json()["segments"] == before["segments"] and undone.json()["polish_revision"] is None
+    assert browser.get(f"/api/sessions/{sid}/photo/{filename}").content == image
+    assert browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": original}).status_code == 409
+
+
+def test_polish_conflicts_and_changed_photo_references_never_overwrite_content(client):
+    browser, store, _ = client
+    sid = store.create(Settings())
+    store.update(sid, status="completed")
+    original = "# 标题\n\n正文。\n\n![图](photo/original.png)\n"
+    store.save_markdown(sid, original)
+    assert browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": "# 丢失图片", "base_content": original}).status_code == 409
+    polished = original.replace("正文。", "润色正文。")
+    revision = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": polished, "base_content": original}).json()["polish_revision"]
+    store.save_markdown(sid, polished + "\n手动新内容。")
+    assert browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": polished, "base_content": original}).status_code == 409
+    assert browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": polished}).status_code == 409
+    assert store.get(sid)["markdown_content"].endswith("手动新内容。")
+    assert store.get(sid)["polish_revision"] is None
+    assert browser.post("/api/sessions/missing/polish/apply", json={"content": "x", "base_content": ""}).status_code == 404
+
+
+@pytest.mark.parametrize("state", ["recording", "paused", "preparing", "stopping"])
+def test_polish_cannot_apply_while_transcribing(client, state):
+    browser, store, _ = client
+    sid = store.create(Settings())
+    store.update(sid, status=state)
+    original = browser.get(f"/api/sessions/{sid}/markdown").text
+    assert browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": original + "x", "base_content": original}).status_code == 409
+    assert store.get(sid)["markdown_content"] is None
+
+
+def test_polish_history_is_removed_with_the_record(client):
+    browser, store, _ = client
+    sid = store.create(Settings())
+    store.update(sid, status="completed")
+    store.save_markdown(sid, "# 原文\n\n正文。")
+    assert browser.post(f"/api/sessions/{sid}/polish/apply", json={"base_content": "# 原文\n\n正文。", "content": "# 原文\n\n润色正文。"}).status_code == 200
+    assert browser.delete(f"/api/sessions/{sid}").status_code == 200
+    with store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM markdown_polishes WHERE session_id=?", (sid,)).fetchone()[0] == 0
+
+
 @pytest.mark.parametrize("source", ["microphone", "system", "mixed"])
 def test_audio_source_is_saved_and_returned_for_new_records(client, source):
     browser, store, _ = client

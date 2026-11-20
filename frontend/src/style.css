@@ -524,10 +524,13 @@ button:focus-visible {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .markdown-view-switch {
   display: inline-grid;
   grid-template-columns: repeat(2, 1fr);
+  flex-shrink: 0;
   align-items: center;
   gap: 2px;
   padding: 2px;
@@ -771,6 +774,142 @@ button:focus-visible {
   gap: 16px;
   border-top: 1px solid #eef1f7;
   padding-top: 15px;
+}
+.polish-configuration {
+  border-top: 1px solid #eef1f7;
+  padding: 15px 0 16px;
+  scroll-margin-top: 12px;
+}
+.polish-configuration h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #27344c;
+}
+.polish-configuration h3 span {
+  font-size: 9px;
+  font-weight: 400;
+  color: #a3adc0;
+}
+.polish-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.polish-connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #8292af;
+}
+.polish-connection-status.connected {
+  color: #389e0d;
+}
+.polish-connection-status.failed {
+  color: #f5222d;
+}
+.polish-actions .ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 26px;
+  padding: 0 8px;
+  gap: 4px;
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1;
+  box-shadow: none;
+}
+.polish-configuration .ant-input-affix-wrapper > input.ant-input {
+  font-size: 11px;
+}
+.polish-key-visibility {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 3px;
+  background: none;
+  color: #8c8c8c;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.polish-key-visibility:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.polish-key-visibility:focus-visible {
+  outline: 2px solid #4462ff;
+  border-radius: 3px;
+}
+.polish-key-saved {
+  display: block;
+  margin-top: 5px;
+}
+.polish-error {
+  margin-top: 12px;
+  font-size: 10px;
+}
+.polish-button-group {
+  display: inline-flex;
+  align-items: center;
+}
+.polish-privacy,
+.polish-progress {
+  margin: 8px 0 14px;
+  color: #74849d;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.polish-progress {
+  color: #4263eb;
+}
+.polish-result-error {
+  margin-bottom: 12px;
+}
+.polish-comparison {
+  display: grid;
+  gap: 14px;
+}
+.polish-comparison.has-result {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.polish-comparison section {
+  min-width: 0;
+  border: 1px solid #e7ebf3;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.polish-comparison h3 {
+  margin: 0;
+  padding: 9px 12px;
+  background: #fafbfe;
+  border-bottom: 1px solid #edf0f5;
+  color: #74849d;
+  font-size: 11px;
+  font-weight: 500;
+}
+.polish-comparison .markdown-preview {
+  height: min(360px, 45vh);
+  padding: 12px;
+  font-size: 12px;
+}
+.polish-comparison .markdown-preview img {
+  max-width: 100%;
+}
+.polish-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 .readiness-row {
   display: flex;

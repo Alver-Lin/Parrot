@@ -4,6 +4,8 @@ import { Modal, message, theme } from "ant-design-vue";
 import zhCN from "ant-design-vue/es/locale/zh_CN";
 import TranscriptPhoto from "./TranscriptPhoto.vue";
 import MarkdownPreview from "./MarkdownPreview.vue";
+import PolishSettings from "./PolishSettings.vue";
+import PolishAction from "./PolishAction.vue";
 import {
   AudioOutlined,
   CameraOutlined,
@@ -32,6 +34,7 @@ import {
   api,
   time,
   toMarkdown,
+  fetchMarkdown,
   type Segment,
   type Session,
   type Settings,
@@ -257,10 +260,10 @@ const selectedModelDownloaded = computed(() => !!selectedEngine.value &&
   !!status.value?.model_cache.downloaded[selectedEngine.value]?.[settings.model]);
 const selectedModelMatches = computed(() => status.value?.model.model === settings.model &&
   status.value?.model.engine === selectedEngine.value);
-const modelLabel = computed(() => selectedModelDownloaded.value ? "模型已下载"
-  : selectedModelMatches.value && modelLoading.value ? "模型下载中"
+const modelLabel = computed(() => selectedModelDownloaded.value ? "识别模型已下载"
+  : selectedModelMatches.value && modelLoading.value ? "识别模型下载中"
     : selectedModelMatches.value && status.value?.model.status === "error"
-      ? "模型下载失败" : "模型尚未下载");
+      ? "识别模型下载失败" : "识别模型尚未下载");
 
 function dateLabel(value: string) {
   return new Date(value).toLocaleString("zh-CN", {
@@ -393,6 +396,49 @@ function options(): Settings {
 
 function showError(error: unknown) {
   message.error(error instanceof Error ? error.message : "操作失败，请重试");
+}
+
+async function preparePolishDocument(id: string) {
+  const revision = selectionRevision;
+  if (selected.value?.id !== id || currentActive.value) throw new Error("请先结束当前记录的转写");
+  await saveMarkdownDraft(id);
+  if (markdownDrafts[id]?.error) throw new Error("请先保存当前文稿，再进行润色");
+  const localContent = markdown.value;
+  const source = await fetchMarkdown(id);
+  if (selected.value?.id !== id || selectionRevision !== revision || markdown.value !== localContent)
+    throw new Error("文稿已变化，请重新点击 AI 润色");
+  return { source, localContent };
+}
+
+function acceptPolishedSession(detail: Session) {
+  if (selected.value?.id !== detail.id) return;
+  ++selectionRevision;
+  clearTimeout(markdownTimers.get(detail.id));
+  markdownTimers.delete(detail.id);
+  selected.value = detail;
+  markdownDrafts[detail.id] = { text: toMarkdown(detail), saved: toMarkdown(detail), saving: false, error: false };
+  const item = sessions.value.find(item => item.id === detail.id);
+  if (item) item.title = detail.title;
+}
+
+async function applyPolishResult(id: string, content: string, source: string, localContent: string) {
+  if (selected.value?.id !== id || markdown.value !== localContent || currentActive.value)
+    throw new Error("原文已变化，润色预览已保留，请重新生成");
+  await saveMarkdownDraft(id);
+  if (markdownDrafts[id]?.error) throw new Error("请先保存当前文稿");
+  const detail = await api<Session>(`/sessions/${id}/polish/apply`, {
+    method: "POST", body: JSON.stringify({ content, base_content: source }),
+  });
+  acceptPolishedSession(detail);
+}
+
+async function undoPolishResult(id: string, revision: number) {
+  if (selected.value?.id !== id || markdownSaveVisible.value || currentActive.value)
+    throw new Error("当前文稿有修改，请先保存后再操作");
+  const detail = await api<Session>(`/sessions/${id}/polish/undo`, {
+    method: "POST", body: JSON.stringify({ revision_id: revision, base_content: markdown.value }),
+  });
+  acceptPolishedSession(detail);
 }
 
 async function start() {
@@ -979,7 +1025,10 @@ onUnmounted(() => {
                 aria-label="保存 Markdown"
                 @click="saveMarkdownDraft()"
               >{{ markdownSaveLabel }}</a-button>
-              <a-button type="text" size="small" @click="copyMarkdown"
+              <PolishAction v-if="selected" :session-id="selected.id" :content="markdown" :active="currentActive"
+                :unsaved="!!markdownSaveVisible" :revision-id="selected.polish_revision" :prepare="preparePolishDocument"
+                :apply="applyPolishResult" :undo="undoPolishResult" @open-settings="openSettings" />
+              <a-button type="text" size="small" aria-label="复制全文" @click="copyMarkdown"
               ><CopyOutlined /> 复制全文</a-button
               >
             </div>
@@ -1225,6 +1274,7 @@ onUnmounted(() => {
             :checked="autoScroll" :loading="autoScrollLoading" :disabled="autoScrollLoading"
             @change="changeAutoScroll" />
         </div>
+        <PolishSettings />
         <div class="recognition-status" aria-label="程序状态">
           <div class="readiness-row permission-status"
             :class="{ 'is-ready': authorizationReady, 'is-error': permissionCheckFailed || (capturePermissions && !authorizationReady) }"
@@ -1268,9 +1318,10 @@ onUnmounted(() => {
           </div>
           <div v-else class="readiness-row" role="status">
             <div class="readiness-copy">
-              <strong><LoadingOutlined class="status-pending" /> 正在检查模型状态</strong>
+              <strong><LoadingOutlined class="status-pending" /> 正在检查识别模型状态</strong>
             </div>
           </div>
+          <PolishSettings status-only />
         </div>
         <a-alert
           v-if="selectedModelMatches && status?.model.status === 'error'"

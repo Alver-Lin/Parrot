@@ -32,6 +32,7 @@ export interface Session extends Settings {
   segments?: Segment[];
   segment_count?: number;
   markdown_content?: string | null;
+  polish_revision?: number | null;
 }
 
 export interface Status {
@@ -84,6 +85,12 @@ export function time(seconds = 0) {
     value % 60,
   ];
   return parts.map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+export async function fetchMarkdown(id: string) {
+  const response = await fetch(`/api/sessions/${id}/markdown`, { headers: desktopHeaders() });
+  if (!response.ok) throw new Error("无法读取当前文稿，请稍后重试");
+  return response.text();
 }
 
 export function toMarkdown(session: Session) {

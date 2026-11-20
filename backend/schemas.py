@@ -18,3 +18,13 @@ class EditSegment(BaseModel):
 class EditMarkdown(BaseModel):
     content: str = Field(max_length=1000000)
     base_content: Optional[str] = Field(default=None, max_length=1000000)
+
+
+class ApplyPolish(BaseModel):
+    content: str = Field(min_length=1, max_length=1000000)
+    base_content: str = Field(max_length=1000000)
+
+
+class UndoPolish(BaseModel):
+    revision_id: int = Field(gt=0)
+    base_content: str = Field(max_length=1000000)

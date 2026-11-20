@@ -33,6 +33,13 @@ class Store:
                     review INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS segments_session ON segments(session_id, start);
+                CREATE TABLE IF NOT EXISTS markdown_polishes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    original_content TEXT NOT NULL, result_content TEXT NOT NULL,
+                    created_at TEXT NOT NULL, reverted_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS polishes_session ON markdown_polishes(session_id, id);
             """)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
             if "audio_source" not in columns:
@@ -104,6 +111,13 @@ class Store:
                 dict(s)
                 for s in db.execute("SELECT * FROM segments WHERE session_id=? ORDER BY start,id", (sid,))
             ]
+            revision = db.execute(
+                "SELECT id,result_content FROM markdown_polishes WHERE session_id=? AND reverted_at IS NULL "
+                "ORDER BY id DESC LIMIT 1", (sid,),
+            ).fetchone()
+            result["polish_revision"] = (
+                revision["id"] if revision and revision["result_content"] == markdown(result) else None
+            )
             return result
 
     def get_status(self, sid):
@@ -277,6 +291,46 @@ class Store:
                 "UPDATE sessions SET markdown_content=?,title=COALESCE(?,title) WHERE id=?",
                 (content, markdown_title(content), sid),
             ).rowcount
+
+    def apply_polish(self, sid, content, base_content, revision_id=None):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row is None:
+                return False
+            if row["status"] not in {"completed", "failed", "interrupted"}:
+                raise ValueError("请先结束这条记录的转写，再应用或撤销润色。")
+            session = dict(row)
+            session["segments"] = [dict(segment) for segment in db.execute(
+                "SELECT * FROM segments WHERE session_id=? ORDER BY start,id", (sid,),
+            )]
+            current = markdown(session)
+            if current != base_content:
+                raise ValueError("文稿已被修改，请保留润色预览并重新生成，避免覆盖新内容。")
+            if revision_id is None:
+                # Local photos must keep their exact references and order.
+                image_pattern = r"!\[[^\]]*\]\(photo/[A-Za-z0-9._-]+\)"
+                if re.findall(image_pattern, content) != re.findall(image_pattern, current):
+                    raise ValueError("润色结果改变了截图引用，原文未改动。")
+                if content == current:
+                    return True
+                db.execute(
+                    "INSERT INTO markdown_polishes(session_id,original_content,result_content,created_at) "
+                    "VALUES(?,?,?,?)", (sid, current, content, datetime.now(timezone.utc).isoformat()),
+                )
+            else:
+                revision = db.execute(
+                    "SELECT * FROM markdown_polishes WHERE id=? AND session_id=? AND reverted_at IS NULL",
+                    (revision_id, sid),
+                ).fetchone()
+                if revision is None or revision["result_content"] != current:
+                    raise ValueError("这次润色已不能直接撤销，当前文稿未改动。")
+                content = revision["original_content"]
+                db.execute("UPDATE markdown_polishes SET reverted_at=? WHERE id=?",
+                           (datetime.now(timezone.utc).isoformat(), revision_id))
+            db.execute("UPDATE sessions SET markdown_content=?,title=COALESCE(?,title) WHERE id=?",
+                       (content, markdown_title(content), sid))
+            return True
 
     def delete(self, sid):
         with self.connect() as db:

@@ -520,6 +520,9 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     var microphonePermissionForTest = false
     var grantPermissionForTest = true
     var openedPrivacySourcesForTest: [String] = []
+    lazy var polishSettings = PolishSettingsController(testing: selfTesting)
+    var polishTask: Task<Void, Never>?
+    var polishJobID: String?
     var screenshotInProgress = false
     var screenshotProcess: Process?
     var activity: NSObjectProtocol?
@@ -693,7 +696,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             request(action, payload={}) {
               return new Promise((resolve,reject) => {
                 const id = crypto.randomUUID();
-                const timer = setTimeout(() => {waiting.delete(id);reject(new Error('操作超时，请重试'));}, 300000);
+                const timer = setTimeout(() => {waiting.delete(id);reject(new Error('操作超时，请重试'));}, action === 'polishTextChunks' ? 1800000 : 300000);
                 waiting.set(id,{resolve,reject,timer});
                 window.webkit.messageHandlers.parrot.postMessage({...payload,action,id});
               });
@@ -928,6 +931,41 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         let id = body["id"] as? String
         switch action {
+        case "polishSettings":
+            reply(id, value: polishSettings.snapshot())
+        case "savePolishSettings":
+            do { reply(id, value: try polishSettings.save(body)) }
+            catch { reply(id, error: error.localizedDescription) }
+        case "revealPolishKey":
+            do { reply(id, value: try polishSettings.revealKey(for: body["base_url"] as? String ?? "")) }
+            catch { reply(id, error: error.localizedDescription) }
+        case "testPolishConnection":
+            Task {
+                do { reply(id, value: try await polishSettings.testConnection()) }
+                catch { reply(id, error: error.localizedDescription) }
+            }
+        case "polishTextChunks":
+            guard polishTask == nil, let chunks = body["chunks"] as? [String],
+                  let jobID = body["job_id"] as? String, !jobID.isEmpty, jobID.count <= 80 else {
+                reply(id, error: "已有润色任务进行中或请求无效"); return
+            }
+            polishJobID = jobID
+            polishTask = Task {
+                do {
+                    let result = try await polishSettings.polishBlocks(chunks) { done, total in
+                        let detail: [String: Any] = ["job_id": jobID, "done": done, "total": total]
+                        webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('parrot-polish-progress',{detail:\(jsonLiteral(detail))}))")
+                    }
+                    reply(id, value: ["chunks": result, "settings": polishSettings.snapshot()])
+                } catch is CancellationError { reply(id, error: "已取消润色，原文未改动。") }
+                catch { reply(id, error: error.localizedDescription) }
+                polishTask = nil
+                polishJobID = nil
+            }
+        case "cancelPolish":
+            let matches = body["job_id"] as? String == polishJobID && polishTask != nil
+            if matches { polishTask?.cancel() }
+            reply(id, value: ["cancelled": matches])
         case "audioSource":
             if let source = body["source"] as? String {
                 guard ["microphone", "system", "mixed"].contains(source) else {
@@ -1243,6 +1281,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
 
     func runSelfTest() async {
         do {
+            try await PolishSettingsController.runSelfTest()
             for _ in 0..<60 {
                 let ready = try? await webView.evaluateJavaScript("!!document.querySelector('[data-testid=desktop-workspace]') && !!window.parrotNative") as? Bool
                 if ready == true { break }
@@ -1355,7 +1394,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               editor.value = content;
               editor.dispatchEvent(new Event('input', {bubbles: true}));
               await new Promise(resolve => setTimeout(resolve, 50));
-              document.querySelector('.markdown-actions button:last-child').click();
+              document.querySelector('[aria-label="复制全文"]').click();
               const exportButton = Array.from(document.querySelectorAll('button')).find(node => node.textContent.includes('导出'));
               exportButton.click();
               await new Promise(resolve => setTimeout(resolve, 1500));
@@ -1553,6 +1592,90 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               }
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
             guard downloadedModelStatus == true else { throw appError("模型状态、下载入口、失败重试或绿色成功圆圈未正确展示") }
+            let polishSettingsWork = try await webView.callAsyncJavaScript("""
+              const row = document.querySelector('.polish-model-status');
+              if (!row?.textContent.includes('润色模型未配置') || !row.querySelector('.status-cross')) return false;
+              const fill = (id, value) => {
+                const input = document.getElementById(id);
+                input.value = value;
+                input.dispatchEvent(new Event('input', {bubbles:true}));
+              };
+              fill('polish-base-url', 'https://api.example.com/compatible-mode/v1/');
+              fill('polish-model', 'parrot-polish-test');
+              fill('polish-api-key', 'parrot-ui-fixture-secret');
+              await new Promise(resolve => setTimeout(resolve, 100));
+              if (document.querySelector('[aria-label="保存 AI 配置"]')
+                || !document.querySelector('.polish-connection-status').textContent.includes('待测试')) return false;
+              document.querySelector('[aria-label="测试 AI 连接"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              const saved = await window.parrotNative.request('polishSettings');
+              if (saved.model !== 'parrot-polish-test' || !saved.has_api_key || saved.api_key
+                || JSON.stringify(saved).includes('parrot-ui-fixture-secret')) return false;
+              const keyInput = document.getElementById('polish-api-key');
+              if (keyInput.value !== 'parrot-ui-fixture-secret' || keyInput.type !== 'password'
+                || document.querySelector('.polish-remove-key')) return false;
+              document.querySelector('[aria-label="显示 API Key"]').click();
+              await new Promise(resolve => setTimeout(resolve, 200));
+              if (keyInput.value !== 'parrot-ui-fixture-secret' || keyInput.type !== 'text'
+                || !document.querySelector('.polish-connection-status.connected')?.textContent.includes('连接成功')) return false;
+              document.querySelector('[aria-label="隐藏 API Key"]').click();
+              await new Promise(resolve => setTimeout(resolve, 100));
+              if (keyInput.value !== 'parrot-ui-fixture-secret' || keyInput.type !== 'password') return false;
+              document.querySelector('[aria-label="显示 API Key"]').click();
+              await new Promise(resolve => setTimeout(resolve, 200));
+              document.querySelector('.polish-configuration').closest('.ant-modal').querySelector('.ant-modal-close').click();
+              await new Promise(resolve => setTimeout(resolve, 300));
+              window.dispatchEvent(new Event('parrot-open-settings'));
+              await new Promise(resolve => setTimeout(resolve, 300));
+              if (keyInput.value !== 'parrot-ui-fixture-secret' || keyInput.type !== 'text') return false;
+              document.querySelector('[aria-label="隐藏 API Key"]').click();
+              fill('polish-api-key', '');
+              fill('polish-model', 'parrot-polish-test-2');
+              await new Promise(resolve => setTimeout(resolve, 100));
+              document.querySelector('[aria-label="测试 AI 连接"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              if (keyInput.value !== 'parrot-ui-fixture-secret') return false;
+              fill('polish-api-key', 'parrot-ui-fixture-replacement');
+              await new Promise(resolve => setTimeout(resolve, 100));
+              document.querySelector('[aria-label="测试 AI 连接"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              if (keyInput.value !== 'parrot-ui-fixture-replacement') return false;
+              const replacement = await window.parrotNative.request('revealPolishKey', {base_url:saved.base_url});
+              if (replacement.api_key !== 'parrot-ui-fixture-replacement') return false;
+              const tested = await window.parrotNative.request('polishSettings');
+              return tested.status === 'connected' && row.textContent.includes('润色模型已连接')
+                && !!row.querySelector('.status-dot') && !row.querySelector('.status-cross')
+                && row.textContent.includes('无需下载');
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard polishSettingsWork == true else { throw appError("AI 测试连接自动保存、密钥回填、显示隐藏、空白保留或替换密钥状态失败") }
+            polishSettings.responseStatusForTest = 401
+            let polishFailureWorks = try await webView.callAsyncJavaScript("""
+              const keyInput = document.getElementById('polish-api-key');
+              keyInput.value = 'parrot-ui-failed-fixture';
+              keyInput.dispatchEvent(new Event('input', {bubbles:true}));
+              await new Promise(resolve => setTimeout(resolve, 100));
+              document.querySelector('[aria-label="测试 AI 连接"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              const row = document.querySelector('.polish-model-status');
+              const settings = await window.parrotNative.request('polishSettings');
+              const stored = await window.parrotNative.request('revealPolishKey', {base_url:settings.base_url});
+              return row.textContent.includes('润色模型连接失败') && row.textContent.includes('401')
+                && !!row.querySelector('.status-cross') && !row.querySelector('.status-dot')
+                && document.querySelector('.polish-connection-status.failed')?.textContent.includes('连接失败')
+                && stored.api_key === 'parrot-ui-failed-fixture' && keyInput.value === stored.api_key;
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard polishFailureWorks == true else { throw appError("润色连接失败时应显示红叉及错误原因") }
+            polishSettings.responseStatusForTest = 200
+            _ = try await webView.callAsyncJavaScript("""
+              document.querySelector('[aria-label="测试 AI 连接"]').click();
+              await new Promise(resolve => setTimeout(resolve, 3500));
+              document.querySelector('.recognition-status').scrollIntoView({block:'end'});
+            """, arguments: [:], in: nil, contentWorld: .page)
+            if let image = try? await webView.takeSnapshot(configuration: nil),
+               let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+               let png = bitmap.representation(using: .png, properties: [:]) {
+                try png.write(to: selfTestDirectory.appendingPathComponent("desktop-settings-ai.png"))
+            }
             let autoScrollWorks = try await webView.callAsyncJavaScript("""
               const toggle = document.querySelector('#auto-scroll-switch');
               if (!toggle || toggle.getAttribute('aria-checked') !== 'true') return false;
@@ -1585,6 +1708,58 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             """, arguments: ["sid": sid], in: nil, contentWorld: .page) as? Bool
             guard sourceRequestWorks == true, permissionSourcesForTest.first == "system",
                   permissionSourcesForTest.last == "mixed" else { throw appError("新记录未使用所选音频来源及对应权限") }
+            let originalPolishDocument = try await requestJSON("/api/sessions/\(sid)")
+            let originalPolishText = originalPolishDocument["markdown_content"] as? String ?? ""
+            let expectedPhoto = "photo/" + photoFilename
+            let requestCountBeforePolish = polishSettings.requestsForTest.count
+            let polishPreviewWorks = try await webView.callAsyncJavaScript("""
+              document.querySelector('#rc-tabs-0-tab-markdown')?.click();
+              await new Promise(resolve => setTimeout(resolve, 150));
+              document.querySelector('[aria-label="AI 润色"]').click();
+              await new Promise(resolve => setTimeout(resolve, 300));
+              const privacy = document.querySelector('.polish-privacy');
+              if (!privacy?.textContent.includes('不上传、不读图')) return false;
+              document.querySelector('[aria-label="开始 AI 润色"]').click();
+              await new Promise(resolve => setTimeout(resolve, 500));
+              const panes = document.querySelectorAll('.polish-comparison section');
+              const apply = document.querySelector('[aria-label="应用 AI 润色"]');
+              return panes.length === 2 && !!apply && !apply.disabled && panes[1].textContent.includes('已润色')
+                && panes[0].querySelectorAll('.transcript-photo').length === 1
+                && panes[1].querySelectorAll('.transcript-photo').length === 1;
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard polishPreviewWorks == true else { throw appError("AI 润色按钮、图文预览或应用入口无效") }
+            let beforeApply = try await requestJSON("/api/sessions/\(sid)")
+            guard beforeApply["markdown_content"] as? String == originalPolishText else { throw appError("预览不应自动覆盖文稿") }
+            for request in polishSettings.requestsForTest.dropFirst(requestCountBeforePolish) {
+                let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+                guard !body.contains(expectedPhoto), !body.contains(photoFilename), !body.contains("![截图")
+                    else { throw appError("截图引用不应发送到润色 API") }
+            }
+            if let image = try? await webView.takeSnapshot(configuration: nil),
+               let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+               let png = bitmap.representation(using: .png, properties: [:]) {
+                try png.write(to: selfTestDirectory.appendingPathComponent("desktop-polish-preview.png"))
+            }
+            let polishApplyWorks = try await webView.callAsyncJavaScript("""
+              document.querySelector('[aria-label="应用 AI 润色"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              return document.querySelector('.markdown-editor')?.value.includes('已润色')
+                && !!document.querySelector('[aria-label="撤销 AI 润色"]');
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard polishApplyWorks == true else { throw appError("应用润色后文稿或撤销入口无效") }
+            let afterPolish = try await requestJSON("/api/sessions/\(sid)")
+            guard (afterPolish["markdown_content"] as? String)?.contains(expectedPhoto) == true else { throw appError("润色后截图引用丢失") }
+            let afterPolishPhoto = try await request("/api/sessions/\(sid)/photo/\(photoFilename)")
+            guard afterPolishPhoto.0 == photoData else { throw appError("润色不应改变截图文件") }
+            let polishUndoWorks = try await webView.callAsyncJavaScript("""
+              document.querySelector('[aria-label="撤销 AI 润色"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              return !document.querySelector('.markdown-editor')?.value.includes('已润色')
+                && !document.querySelector('[aria-label="撤销 AI 润色"]');
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard polishUndoWorks == true else { throw appError("撤销润色未恢复原文") }
+            let afterUndo = try await requestJSON("/api/sessions/\(sid)")
+            guard afterUndo["markdown_content"] as? String == originalPolishText else { throw appError("撤销润色未精确恢复原文") }
             let image = try await webView.takeSnapshot(configuration: nil)
             if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
                 try png.write(to: selfTestDirectory.appendingPathComponent("desktop-panel.png"))
@@ -1635,6 +1810,17 @@ func unusedPort() throws -> Int {
 @main
 struct ParrotDesktop {
     @MainActor static func main() {
+        if let index = CommandLine.arguments.firstIndex(of: "--polish-storage-self-test") {
+            do {
+                guard CommandLine.arguments.count == index + 3 else { throw polishError("缺少持久化自检参数") }
+                try PolishSettingsController.runPersistenceSelfTest(phase: CommandLine.arguments[index + 1],
+                                                                   identifier: CommandLine.arguments[index + 2])
+            } catch {
+                fputs(error.localizedDescription + "\n", stderr)
+                exit(1)
+            }
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--write-iconset"), CommandLine.arguments.count > index + 1 {
             let folder = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
             try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

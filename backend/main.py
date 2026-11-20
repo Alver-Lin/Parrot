@@ -19,7 +19,7 @@ from starlette.background import BackgroundTask
 from .asr import cached_models
 from .config import APPLE_SILICON, CAPTURE_BINARY, DESKTOP_TOKEN, ROOT
 from .photos import MAX_SCREENSHOT_BYTES, validate_png
-from .schemas import EditMarkdown, EditSegment, Settings
+from .schemas import ApplyPolish, EditMarkdown, EditSegment, Settings, UndoPolish
 from .service import TranscriptionService
 from .store import Store, markdown
 
@@ -306,6 +306,28 @@ async def edit_markdown(sid: str, body: EditMarkdown):
         raise HTTPException(404, "记录不存在")
     session = require_session(sid)
     return {"ok": True, "title": session["title"], "content": session["markdown_content"]}
+
+
+@app.post("/api/sessions/{sid}/polish/apply")
+async def apply_polish(sid: str, body: ApplyPolish):
+    try:
+        saved = store.apply_polish(sid, body.content, body.base_content)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not saved:
+        raise HTTPException(404, "记录不存在")
+    return require_session(sid)
+
+
+@app.post("/api/sessions/{sid}/polish/undo")
+async def undo_polish(sid: str, body: UndoPolish):
+    try:
+        saved = store.apply_polish(sid, "", body.base_content, revision_id=body.revision_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not saved:
+        raise HTTPException(404, "记录不存在")
+    return require_session(sid)
 
 
 dist = ROOT / "frontend" / "dist"

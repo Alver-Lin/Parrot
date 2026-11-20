@@ -90,6 +90,52 @@ export async function readCapturePermissions(): Promise<CapturePermissions | nul
   return window.parrotNative.request<CapturePermissions>("capturePermissionStatus");
 }
 
+export interface PolishSettings {
+  base_url: string;
+  model: string;
+  has_api_key: boolean;
+  configured: boolean;
+  status: "unconfigured" | "untested" | "testing" | "connected" | "failed";
+  message: string;
+}
+
+export interface PolishSettingsInput {
+  base_url: string;
+  model: string;
+  api_key?: string;
+}
+
+export async function loadPolishSettings(): Promise<PolishSettings> {
+  if (!window.parrotNative) return {
+    base_url: "", model: "", has_api_key: false, configured: false, status: "unconfigured", message: "",
+  };
+  return window.parrotNative.request<PolishSettings>("polishSettings");
+}
+
+export async function savePolishSettings(settings: PolishSettingsInput) {
+  if (!window.parrotNative) throw new Error("请在 Parrot 桌面客户端保存 AI 配置");
+  return window.parrotNative.request<PolishSettings>("savePolishSettings", { ...settings });
+}
+
+export async function revealPolishKey(baseURL: string) {
+  if (!window.parrotNative) throw new Error("请在 Parrot 桌面客户端查看 API Key");
+  return window.parrotNative.request<{ api_key: string }>("revealPolishKey", { base_url: baseURL });
+}
+
+export async function testPolishConnection() {
+  if (!window.parrotNative) throw new Error("请在 Parrot 桌面客户端测试连接");
+  return window.parrotNative.request<PolishSettings>("testPolishConnection");
+}
+
+export async function polishTextChunks(jobId: string, chunks: string[]) {
+  if (!window.parrotNative) throw new Error("请在 Parrot 桌面客户端中使用 AI 润色");
+  return window.parrotNative.request<{ chunks: string[]; settings: PolishSettings }>("polishTextChunks", { job_id: jobId, chunks });
+}
+
+export async function cancelPolish(jobId: string) {
+  return window.parrotNative?.request("cancelPolish", { job_id: jobId });
+}
+
 export async function openCaptureSettings(source: AudioSource = "system") {
   await window.parrotNative?.request("openCaptureSettings", { source });
 }

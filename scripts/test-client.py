@@ -3,6 +3,7 @@
 import os
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -11,6 +12,12 @@ ROOT = Path(__file__).resolve().parent.parent
 def main():
     app = ROOT / "dist/Parrot.app"
     binary = app / "Contents/MacOS/Parrot"
+    namespace = str(uuid.uuid4())
+    try:
+        for phase in ["blocked", "legacy", "migrate", "write", "read", "verify"]:
+            subprocess.run([str(binary), "--polish-storage-self-test", phase, namespace], timeout=30, check=True)
+    finally:
+        subprocess.run([str(binary), "--polish-storage-self-test", "cleanup", namespace], timeout=30, check=True)
     subprocess.run([str(app / "Contents/MacOS/ParrotCapture"), "--self-test"], check=True)
     runtime = app / "Contents/Resources/runtime"
     python = os.environ.get("PARROT_PYTHON", str(ROOT / ".venv/bin/python"))
