@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import DATA
+from .timeformat import format_created_at, normalize_creation_header
 
 
 class Store:
@@ -51,11 +52,34 @@ class Store:
                 db.execute("ALTER TABLE segments ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'")
             if "photo_filename" not in segment_columns:
                 db.execute("ALTER TABLE segments ADD COLUMN photo_filename TEXT")
+            self._normalize_creation_headers(db)
             db.execute(
                 "UPDATE sessions SET status='interrupted', error=? "
                 "WHERE status IN ('preparing','recording','pausing','paused','resuming','transcribing','stopping')",
                 ("服务已重启。已完成的文字仍保留，可校对并导出。",),
             )
+
+    @staticmethod
+    def _normalize_creation_headers(db):
+        # Normalize both current notes and undo snapshots together so revisions remain usable.
+        for row in db.execute(
+            "SELECT id,created_at,markdown_content FROM sessions "
+            "WHERE instr(markdown_content, '- 创建时间：' || created_at) > 0"
+        ).fetchall():
+            content = normalize_creation_header(row["markdown_content"], row["created_at"])
+            if content != row["markdown_content"]:
+                db.execute("UPDATE sessions SET markdown_content=? WHERE id=?", (content, row["id"]))
+        for row in db.execute(
+            "SELECT p.id,s.created_at,p.original_content,p.result_content "
+            "FROM markdown_polishes p JOIN sessions s ON s.id=p.session_id "
+            "WHERE instr(p.original_content, '- 创建时间：' || s.created_at) > 0 "
+            "OR instr(p.result_content, '- 创建时间：' || s.created_at) > 0"
+        ).fetchall():
+            original = normalize_creation_header(row["original_content"], row["created_at"])
+            result = normalize_creation_header(row["result_content"], row["created_at"])
+            if original != row["original_content"] or result != row["result_content"]:
+                db.execute("UPDATE markdown_polishes SET original_content=?,result_content=? WHERE id=?",
+                           (original, result, row["id"]))
 
     @contextmanager
     def connect(self):
@@ -308,10 +332,6 @@ class Store:
             if current != base_content:
                 raise ValueError("文稿已被修改，请保留润色预览并重新生成，避免覆盖新内容。")
             if revision_id is None:
-                # Local photos must keep their exact references and order.
-                image_pattern = r"!\[[^\]]*\]\(photo/[A-Za-z0-9._-]+\)"
-                if re.findall(image_pattern, content) != re.findall(image_pattern, current):
-                    raise ValueError("润色结果改变了截图引用，原文未改动。")
                 if content == current:
                     return True
                 db.execute(
@@ -403,7 +423,7 @@ def markdown(session):
     lines = [
         f"# {title}",
         "",
-        f"- 创建时间：{session['created_at']}",
+        f"- 创建时间：{format_created_at(session['created_at'])}",
         f"- 识别模型：Whisper {session['model']}",
         f"- 音频时长：{timestamp(session['duration'])}",
         "",

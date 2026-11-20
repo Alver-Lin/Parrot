@@ -1,4 +1,5 @@
 import type { AudioSource } from "./api";
+import type { PolishPlan } from "./markdownPolish";
 
 declare global {
   interface Window {
@@ -127,9 +128,11 @@ export async function testPolishConnection() {
   return window.parrotNative.request<PolishSettings>("testPolishConnection");
 }
 
-export async function polishTextChunks(jobId: string, chunks: string[]) {
+export async function polishTextChunks(jobId: string, sessionId: string, plan: PolishPlan) {
   if (!window.parrotNative) throw new Error("请在 Parrot 桌面客户端中使用 AI 润色");
-  return window.parrotNative.request<{ chunks: string[]; settings: PolishSettings }>("polishTextChunks", { job_id: jobId, chunks });
+  return window.parrotNative.request<{ chunks: string[]; settings: PolishSettings }>("polishTextChunks", {
+    job_id: jobId, session_id: sessionId, chunks: plan.chunks, anchors: plan.anchors, images: plan.images,
+  });
 }
 
 export async function cancelPolish(jobId: string) {

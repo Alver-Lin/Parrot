@@ -3,8 +3,29 @@ import AVFoundation
 import CoreGraphics
 import Darwin
 import Foundation
+import ImageIO
 import UniformTypeIdentifiers
 import WebKit
+
+// Only a bounded preview is sent; the stored screenshot stays unchanged.
+private func polishScreenshotPreview(_ data: Data) throws -> Data {
+    guard data.count <= 25 * 1024 * 1024,
+          let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+          let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+              kCGImageSourceCreateThumbnailFromImageAlways: true,
+              kCGImageSourceCreateThumbnailWithTransform: true,
+              kCGImageSourceThumbnailMaxPixelSize: 2048,
+          ] as CFDictionary) else { throw polishError("截图无法读取，请重新截图后再整理。") }
+    let output = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else {
+        throw polishError("无法准备截图预览。")
+    }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination), output.length <= 8_000_000 else {
+        throw polishError("截图预览过大，请缩小截图范围后重试。")
+    }
+    return output as Data
+}
 
 private let accent = NSColor(srgbRed: 0.26, green: 0.39, blue: 0.92, alpha: 1)
 
@@ -952,7 +973,39 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             polishJobID = jobID
             polishTask = Task {
                 do {
-                    let result = try await polishSettings.polishBlocks(chunks) { done, total in
+                    guard let sid = body["session_id"] as? String,
+                          sid.count == 32, sid.allSatisfy({ $0.isHexDigit }),
+                          let anchors = body["anchors"] as? [[String: String]],
+                          let imageSources = body["images"] as? [[String: String]], imageSources.count <= 100 else {
+                        throw polishError("学习笔记请求资料无效。")
+                    }
+                    var attachments: [PolishImageAttachment] = []
+                    var previewCache: [String: Data] = [:]
+                    var previewBytes = 0
+                    for source in imageSources {
+                        try Task.checkCancellation()
+                        guard let filename = source["filename"], filename.count <= 100,
+                              filename.range(of: #"^[A-Za-z0-9_-]+\.png$"#, options: .regularExpression) != nil,
+                              let marker = source["marker"], chunks.contains(where: { $0.contains(marker) }),
+                              anchors.contains(where: { $0["marker"] == marker && $0["kind"] == "image" }),
+                              let imageID = source["id"], imageID.count <= 80,
+                              let label = source["label"], label.count <= 1000 else {
+                            throw polishError("截图资料无效，原文未改动。")
+                        }
+                        let preview: Data
+                        if let cached = previewCache[filename] { preview = cached }
+                        else {
+                            let (data, response) = try await request("/api/sessions/\(sid)/photo/\(filename)", timeout: 30)
+                            guard response.statusCode == 200 else { throw polishError("截图已变化或无法读取，请关闭预览后重新生成。") }
+                            preview = try await Task.detached(priority: .utility) { try polishScreenshotPreview(data) }.value
+                            previewBytes += preview.count
+                            guard previewBytes <= 64_000_000 else { throw polishError("截图总量过大，请拆分记录后再整理。") }
+                            previewCache[filename] = preview
+                        }
+                        attachments.append(PolishImageAttachment(id: imageID, marker: marker, label: label, data: preview))
+                    }
+                    try Task.checkCancellation()
+                    let result = try await polishSettings.polishBlocks(chunks, anchors: anchors, images: attachments) { done, total in
                         let detail: [String: Any] = ["job_id": jobID, "done": done, "total": total]
                         webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('parrot-polish-progress',{detail:\(jsonLiteral(detail))}))")
                     }
@@ -1533,7 +1586,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               row.querySelector('button').click();
               await new Promise(resolve => setTimeout(resolve, 400));
               return row.textContent.includes('程序已授权') && !!row.querySelector('.status-dot')
-                && !row.querySelector('.status-cross') && !row.querySelector('button');
+                && !row.querySelector('.status-cross') && !row.querySelector('button') && !row.querySelector('.readiness-copy p');
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
             guard permissionReady == true else { throw appError("双声源所需权限全部开启后应显示绿色圆圈") }
             try await Task.sleep(nanoseconds: 500_000_000)
@@ -1586,7 +1639,8 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
                 if (!await waitFor(() => downloadRequests === 2)) return false;
                 phase = 'downloaded';
                 return await waitFor(() => section.textContent.includes('模型已下载')
-                  && !!section.querySelector('.status-dot') && !section.querySelector('.status-cross') && !section.querySelector('button'));
+                  && !!section.querySelector('.status-dot') && !section.querySelector('.status-cross')
+                  && !section.querySelector('button') && !section.querySelector('.readiness-copy p'));
               } finally {
                 window.fetch = originalFetch;
               }
@@ -1605,7 +1659,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               fill('polish-api-key', 'parrot-ui-fixture-secret');
               await new Promise(resolve => setTimeout(resolve, 100));
               if (document.querySelector('[aria-label="保存 AI 配置"]')
-                || !document.querySelector('.polish-connection-status').textContent.includes('待测试')) return false;
+                || !row.textContent.includes('待测试')) return false;
               document.querySelector('[aria-label="测试 AI 连接"]').click();
               await new Promise(resolve => setTimeout(resolve, 400));
               const saved = await window.parrotNative.request('polishSettings');
@@ -1617,7 +1671,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               document.querySelector('[aria-label="显示 API Key"]').click();
               await new Promise(resolve => setTimeout(resolve, 200));
               if (keyInput.value !== 'parrot-ui-fixture-secret' || keyInput.type !== 'text'
-                || !document.querySelector('.polish-connection-status.connected')?.textContent.includes('连接成功')) return false;
+                || !row.textContent.includes('润色模型已连接') || !row.querySelector('.status-dot')) return false;
               document.querySelector('[aria-label="隐藏 API Key"]').click();
               await new Promise(resolve => setTimeout(resolve, 100));
               if (keyInput.value !== 'parrot-ui-fixture-secret' || keyInput.type !== 'password') return false;
@@ -1645,7 +1699,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               const tested = await window.parrotNative.request('polishSettings');
               return tested.status === 'connected' && row.textContent.includes('润色模型已连接')
                 && !!row.querySelector('.status-dot') && !row.querySelector('.status-cross')
-                && row.textContent.includes('无需下载');
+                && !row.querySelector('.readiness-copy p');
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
             guard polishSettingsWork == true else { throw appError("AI 测试连接自动保存、密钥回填、显示隐藏、空白保留或替换密钥状态失败") }
             polishSettings.responseStatusForTest = 401
@@ -1661,7 +1715,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               const stored = await window.parrotNative.request('revealPolishKey', {base_url:settings.base_url});
               return row.textContent.includes('润色模型连接失败') && row.textContent.includes('401')
                 && !!row.querySelector('.status-cross') && !row.querySelector('.status-dot')
-                && document.querySelector('.polish-connection-status.failed')?.textContent.includes('连接失败')
+                && settings.status === 'failed'
                 && stored.api_key === 'parrot-ui-failed-fixture' && keyInput.value === stored.api_key;
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
             guard polishFailureWorks == true else { throw appError("润色连接失败时应显示红叉及错误原因") }
@@ -1715,10 +1769,19 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             let polishPreviewWorks = try await webView.callAsyncJavaScript("""
               document.querySelector('#rc-tabs-0-tab-markdown')?.click();
               await new Promise(resolve => setTimeout(resolve, 150));
-              document.querySelector('[aria-label="AI 润色"]').click();
-              await new Promise(resolve => setTimeout(resolve, 300));
-              const privacy = document.querySelector('.polish-privacy');
-              if (!privacy?.textContent.includes('不上传、不读图')) return false;
+              const polishButton = document.querySelector('[aria-label="AI 润色"]');
+              const visiblePolishTooltip = () => [...document.querySelectorAll('.ant-tooltip:not(.ant-tooltip-hidden) .ant-tooltip-inner')]
+                .some(node => node.getClientRects().length && node.textContent.includes('清理转写噪声'));
+              polishButton.dispatchEvent(new MouseEvent('mouseenter', {bubbles:false}));
+              await new Promise(resolve => setTimeout(resolve, 400));
+              if (!visiblePolishTooltip()) throw new Error('悬停时 AI 润色提示未显示');
+              polishButton.click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              if (visiblePolishTooltip()) throw new Error('打开 AI 润色弹窗后悬浮提示仍可见');
+              // A queued hover event must not reopen the tooltip behind the modal.
+              polishButton.dispatchEvent(new MouseEvent('mouseenter', {bubbles:false}));
+              await new Promise(resolve => setTimeout(resolve, 200));
+              if (visiblePolishTooltip()) throw new Error('弹窗打开期间不应重新显示悬浮提示');
               document.querySelector('[aria-label="开始 AI 润色"]').click();
               await new Promise(resolve => setTimeout(resolve, 500));
               const panes = document.querySelectorAll('.polish-comparison section');
@@ -1730,11 +1793,22 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             guard polishPreviewWorks == true else { throw appError("AI 润色按钮、图文预览或应用入口无效") }
             let beforeApply = try await requestJSON("/api/sessions/\(sid)")
             guard beforeApply["markdown_content"] as? String == originalPolishText else { throw appError("预览不应自动覆盖文稿") }
+            var sentImage = false
             for request in polishSettings.requestsForTest.dropFirst(requestCountBeforePolish) {
                 let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
                 guard !body.contains(expectedPhoto), !body.contains(photoFilename), !body.contains("![截图")
-                    else { throw appError("截图引用不应发送到润色 API") }
+                    else { throw appError("截图路径应以占位符保留在本机") }
+                let object = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                let messages = object["messages"] as? [[String: Any]]
+                let parts = messages?.last?["content"] as? [[String: Any]] ?? []
+                sentImage = sentImage || parts.contains { part in
+                    guard part["type"] as? String == "image_url",
+                          let image = part["image_url"] as? [String: String],
+                          let url = image["url"] else { return false }
+                    return url.hasPrefix("data:image/png;base64,")
+                }
             }
+            guard sentImage else { throw appError("截图预览未作为图文输入发送") }
             if let image = try? await webView.takeSnapshot(configuration: nil),
                let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
                let png = bitmap.representation(using: .png, properties: [:]) {

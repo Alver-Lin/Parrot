@@ -20,10 +20,6 @@ const dirty = computed(() => draft.base_url.trim() !== saved.value.base_url
   || draft.model.trim() !== saved.value.model || (!!draft.api_key.trim() && draft.api_key.trim() !== savedKey));
 const connectionState = computed(() => testing.value ? "testing" : loading.value ? "loading"
   : error.value ? "failed" : dirty.value ? "untested" : saved.value.status);
-const connectionLabel = computed(() => connectionState.value === "testing" ? "连接中…"
-  : connectionState.value === "loading" ? "读取中…"
-    : connectionState.value === "connected" ? "连接成功"
-      : connectionState.value === "failed" ? "连接失败" : "待测试");
 const ready = computed(() => !busy.value && connectionState.value === "connected");
 const label = computed(() => loading.value ? "正在读取润色配置"
   : generating.value ? "润色模型处理中"
@@ -32,10 +28,10 @@ const label = computed(() => loading.value ? "正在读取润色配置"
       : dirty.value ? "润色模型配置已修改，待测试"
       : saved.value.status === "connected" ? "润色模型已连接"
           : saved.value.configured ? "润色模型待测试" : "润色模型未配置");
-const description = computed(() => ready.value ? `${saved.value.model} · API 模型无需下载。`
+const description = computed(() => ready.value ? saved.value.model
   : testing.value ? "正在发送简短的连接测试请求。"
     : error.value || (saved.value.status === "failed" && !dirty.value ? saved.value.message : "")
-      || "点击测试连接会自动保存当前配置。API 模型无需下载。");
+      || "点击测试连接会自动保存当前配置。");
 let initialization: Promise<void> | undefined;
 
 async function apply(settings: PolishSettings) {
@@ -82,5 +78,5 @@ watch(() => [draft.base_url, draft.model, draft.api_key], () => {
 
 export function usePolishSettings() {
   return { isDesktop, loading, testing, generating, keyVisible, error, saved, draft, busy, keyAvailable, dirty, ready,
-    label, description, connectionState, connectionLabel, initialize, testConnection, openConfiguration };
+    label, description, connectionState, initialize, testConnection, openConfiguration };
 }

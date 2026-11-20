@@ -5,7 +5,7 @@ import { usePolishSettings } from "./usePolishSettings";
 
 defineProps<{ statusOnly?: boolean }>();
 const { isDesktop, loading, testing, generating, keyVisible, error, saved, draft, busy, keyAvailable, dirty, ready,
-  label, description, connectionState, connectionLabel, initialize, testConnection, openConfiguration } = usePolishSettings();
+  label, description, initialize, testConnection, openConfiguration } = usePolishSettings();
 onMounted(() => { void initialize(); });
 </script>
 
@@ -19,7 +19,7 @@ onMounted(() => { void initialize(); });
         <CloseOutlined v-else class="status-cross" />
         {{ label }}
       </strong>
-      <p>{{ description }}</p>
+      <p v-if="!ready">{{ description }}</p>
     </div>
     <a-button v-if="!ready" type="link" class="readiness-action" :disabled="!isDesktop || busy" :loading="testing"
       @click="saved.configured && !dirty ? testConnection() : openConfiguration()">
@@ -56,12 +56,6 @@ onMounted(() => { void initialize(); });
         </a-form-item>
       </div>
       <div class="polish-actions">
-        <span class="polish-connection-status" :class="connectionState" role="status">
-          <LoadingOutlined v-if="testing || loading" />
-          <span v-else-if="connectionState === 'connected'" class="status-dot" aria-hidden="true"></span>
-          <CloseOutlined v-else-if="connectionState === 'failed'" class="status-cross" />
-          {{ connectionLabel }}
-        </span>
         <a-button size="small" type="primary" aria-label="测试 AI 连接" :loading="testing"
           :disabled="!isDesktop || busy || !draft.base_url.trim() || !draft.model.trim()"
           @click="testConnection">测试连接</a-button>

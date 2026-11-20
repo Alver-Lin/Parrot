@@ -1,4 +1,5 @@
 import { desktopHeaders } from "./desktop";
+import { formatCreatedAt } from "./dateTime";
 
 export type AudioSource = "microphone" | "system" | "mixed";
 
@@ -98,7 +99,7 @@ export function toMarkdown(session: Session) {
   const lines = [
     `# ${session.title.replace(/[\r\n]/g, " ")}`,
     "",
-    `- 创建时间：${session.created_at}`,
+    `- 创建时间：${formatCreatedAt(session.created_at)}`,
     `- 识别模型：Whisper ${session.model}`,
     `- 音频时长：${time(session.duration)}`,
     "",

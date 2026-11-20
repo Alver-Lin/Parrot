@@ -267,13 +267,17 @@ def test_polish_apply_undo_preserves_original_transcript_photos_and_export(clien
     assert browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": original}).status_code == 409
 
 
-def test_polish_conflicts_and_changed_photo_references_never_overwrite_content(client):
+def test_polish_accepts_changed_photo_references_and_still_preserves_parallel_edits(client):
     browser, store, _ = client
     sid = store.create(Settings())
     store.update(sid, status="completed")
     original = "# 标题\n\n正文。\n\n![图](photo/original.png)\n"
     store.save_markdown(sid, original)
-    assert browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": "# 丢失图片", "base_content": original}).status_code == 409
+    accepted = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": "# 自由结果", "base_content": original})
+    assert accepted.status_code == 200
+    assert browser.post(f"/api/sessions/{sid}/polish/undo", json={
+        "revision_id": accepted.json()["polish_revision"], "base_content": "# 自由结果",
+    }).status_code == 200
     polished = original.replace("正文。", "润色正文。")
     revision = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": polished, "base_content": original}).json()["polish_revision"]
     store.save_markdown(sid, polished + "\n手动新内容。")
@@ -911,3 +915,35 @@ def test_pause_at_exact_flush_boundary_does_not_reuse_old_context(tmp_path):
     assert first.path != resumed.path
     with wave.open(str(resumed.path)) as audio:
         assert audio.getnframes() == 1600
+
+
+def test_study_notes_can_reorder_photos_and_update_title_with_exact_undo(client):
+    browser, store, _ = client
+    sid = store.create(Settings(title="学习记录"))
+    store.update(sid, status="completed")
+    image = png_bytes()
+    for at in [1, 2]:
+        assert browser.post(f"/api/sessions/{sid}/screenshots?at={at}", content=image,
+                            headers={"Content-Type": "image/png"}).status_code == 201
+    before = store.get(sid)
+    photos = [segment["text"] for segment in before["segments"] if segment["kind"] == "image"]
+    original = browser.get(f"/api/sessions/{sid}/markdown").text
+    result = f"# RAG 的检索与生成\n\n## 检索\n\n{photos[1]}\n\n## 生成\n\n{photos[0]}\n"
+    applied = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": result, "base_content": original})
+    assert applied.status_code == 200
+    assert applied.json()["title"] == "RAG 的检索与生成"
+    assert applied.json()["segments"] == before["segments"]
+    for segment in before["segments"]:
+        assert browser.get(f"/api/sessions/{sid}/photo/{segment['photo_filename']}").content == image
+    for changed in [result.replace(photos[0], ""), result + photos[0], result.replace("photo/", "photo/new-")]:
+        saved = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": changed, "base_content": result})
+        assert saved.status_code == 200
+        assert saved.json()["markdown_content"] == changed
+        assert browser.post(f"/api/sessions/{sid}/polish/undo", json={
+            "revision_id": saved.json()["polish_revision"], "base_content": changed,
+        }).status_code == 200
+    revision = applied.json()["polish_revision"]
+    undone = browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": result})
+    assert undone.status_code == 200
+    assert undone.json()["markdown_content"] == original
+    assert undone.json()["title"] == "学习记录"

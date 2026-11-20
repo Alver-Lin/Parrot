@@ -735,6 +735,12 @@ button:focus-visible {
   overflow: auto;
   scrollbar-width: thin;
 }
+.settings-modal .ant-modal-body {
+  scrollbar-width: none;
+}
+.settings-modal .ant-modal-body::-webkit-scrollbar {
+  display: none;
+}
 .client-modal .ant-modal-title {
   font-size: 14px;
 }
@@ -801,19 +807,6 @@ button:focus-visible {
   justify-content: flex-end;
   gap: 8px;
 }
-.polish-connection-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: #8292af;
-}
-.polish-connection-status.connected {
-  color: #389e0d;
-}
-.polish-connection-status.failed {
-  color: #f5222d;
-}
 .polish-actions .ant-btn {
   display: inline-flex;
   align-items: center;
@@ -862,15 +855,11 @@ button:focus-visible {
   display: inline-flex;
   align-items: center;
 }
-.polish-privacy,
 .polish-progress {
   margin: 8px 0 14px;
-  color: #74849d;
+  color: #4263eb;
   font-size: 11px;
   line-height: 1.8;
-}
-.polish-progress {
-  color: #4263eb;
 }
 .polish-result-error {
   margin-bottom: 12px;

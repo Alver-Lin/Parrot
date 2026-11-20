@@ -12,7 +12,12 @@ type PreviewPart =
 const IMAGE_RE = /!\[([^\]]*)\]\((photo\/[A-Za-z0-9._-]+)\)/g;
 
 const renderer = new Renderer();
-renderer.image = () => "";
+const escapeAttribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+  .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+renderer.image = ({ href, text }) => {
+  if (!/^(https?:\/\/|data:image\/(?:png|jpeg|gif|webp);base64,)/i.test(href)) return escapeAttribute(text);
+  return `<img src="${escapeAttribute(href)}" alt="${escapeAttribute(text)}" loading="lazy" referrerpolicy="no-referrer" />`;
+};
 renderer.link = ({ href, text }) => {
   const safe =
     /^(https?:|mailto:)/i.test(href) && !/[\s"<>]/.test(href);

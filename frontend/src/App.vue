@@ -6,13 +6,13 @@ import TranscriptPhoto from "./TranscriptPhoto.vue";
 import MarkdownPreview from "./MarkdownPreview.vue";
 import PolishSettings from "./PolishSettings.vue";
 import PolishAction from "./PolishAction.vue";
+import { DISPLAY_TIME_ZONE } from "./dateTime";
 import {
   AudioOutlined,
   CameraOutlined,
   ArrowDownOutlined,
   ArrowRightOutlined,
   CheckOutlined,
-  CloudDownloadOutlined,
   CodeOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -267,6 +267,7 @@ const modelLabel = computed(() => selectedModelDownloaded.value ? "识别模型�
 
 function dateLabel(value: string) {
   return new Date(value).toLocaleString("zh-CN", {
+    timeZone: DISPLAY_TIME_ZONE,
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -390,7 +391,7 @@ function removeSession(item: Session, event: Event) {
 function options(): Settings {
   return {
     ...settings,
-    title: `学习记录 ${new Date().toLocaleDateString("zh-CN")}`,
+    title: `学习记录 ${new Date().toLocaleDateString("zh-CN", { timeZone: DISPLAY_TIME_ZONE })}`,
   };
 }
 
@@ -1234,7 +1235,7 @@ onUnmounted(() => {
         title="识别设置"
         :footer="null"
         width="480px"
-        wrap-class-name="client-modal"
+        wrap-class-name="client-modal settings-modal"
       >
         <a-form layout="vertical" :disabled="busy || modelLoading">
           <a-form-item label="音频来源">
@@ -1287,7 +1288,7 @@ onUnmounted(() => {
                 <InfoCircleOutlined v-else class="status-pending" />
                 {{ authorizationLabel }}
               </strong>
-              <p>{{ authorizationDescription }}</p>
+              <p v-if="!authorizationReady">{{ authorizationDescription }}</p>
             </div>
             <a-button v-if="capturePermissions && !authorizationReady"
               type="link" class="readiness-action" :loading="authorizationPending"
@@ -1306,7 +1307,7 @@ onUnmounted(() => {
                 <CloseOutlined v-else class="status-cross" />
                 {{ modelLabel }}
               </strong>
-              <p>{{ selectedModelDownloaded ? '开始转写时自动载入，无需重复下载。' : modelLoading ? '正在下载所选模型，请保持网络连接。' : '点击下载所选模型，完成后会保存在本地。' }}</p>
+              <p v-if="!selectedModelDownloaded">{{ modelLoading ? '正在下载所选模型，请保持网络连接。' : '点击下载所选模型，完成后会保存在本地。' }}</p>
             </div>
             <a-button
               v-if="!selectedModelDownloaded"
@@ -1314,7 +1315,7 @@ onUnmounted(() => {
               :disabled="!connected || busy || modelLoading || modelRequestPending"
               :loading="modelLoading || modelRequestPending"
               @click="prepareModel"
-              ><CloudDownloadOutlined /> {{ modelLoading ? '下载中' : '下载模型' }}</a-button>
+              >{{ modelLoading ? '下载中' : '下载模型' }}</a-button>
           </div>
           <div v-else class="readiness-row" role="status">
             <div class="readiness-copy">
