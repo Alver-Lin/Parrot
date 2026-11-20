@@ -40,6 +40,8 @@ def build(app, identity, python):
         "-framework",
         "AppKit",
         "-framework",
+        "AVFoundation",
+        "-framework",
         "WebKit",
         "-framework",
         "UniformTypeIdentifiers",
@@ -76,7 +78,8 @@ def build(app, identity, python):
         "ParrotPythonExecutable": str(python),
         "ParrotDataDirectory": str(ROOT / ".data"),
         "NSScreenCaptureUsageDescription": "采集电脑播放的课程声音并转成文字，不保存屏幕画面。",
-        "NSAudioCaptureUsageDescription": "将电脑播放的课程声音转成文字，不采集麦克风或保存完整录音。",
+        "NSAudioCaptureUsageDescription": "将本机播放的声音转成文字，不保存完整录音。",
+        "NSMicrophoneUsageDescription": "选择麦克风或双声源模式时，将麦克风声音转成文字，不保存完整录音。",
     }
     with (app / "Contents/Info.plist").open("wb") as output_file:
         plistlib.dump(info, output_file)

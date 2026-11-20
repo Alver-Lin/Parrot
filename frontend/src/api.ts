@@ -1,7 +1,10 @@
 import { desktopHeaders } from "./desktop";
 
+export type AudioSource = "microphone" | "system" | "mixed";
+
 export interface Settings {
   title: string;
+  audio_source: AudioSource;
   language: "auto" | "zh" | "en";
   model: "large-v3" | "large-v3-turbo" | "small";
   engine: "auto" | "mlx" | "faster-whisper";

@@ -1,3 +1,5 @@
+import type { AudioSource } from "./api";
+
 declare global {
   interface Window {
     __PARROT_DESKTOP__?: Readonly<{ token: string; platform: string }>;
@@ -73,14 +75,28 @@ export async function takeScreenshot(sessionId: string, segmentId?: number) {
   });
 }
 
-export async function ensureCapturePermission() {
-  if (!window.parrotNative) return true;
-  const result = await window.parrotNative.request<{ granted: boolean }>("capturePermission");
-  return result.granted;
+export async function ensureCapturePermission(source: AudioSource) {
+  if (!window.parrotNative) return { granted: true, source };
+  return window.parrotNative.request<{ granted: boolean; source: AudioSource }>("capturePermission", { source });
 }
 
-export async function openCaptureSettings() {
-  await window.parrotNative?.request("openCaptureSettings");
+export async function openCaptureSettings(source: AudioSource = "system") {
+  await window.parrotNative?.request("openCaptureSettings", { source });
+}
+
+export async function loadAudioSource(): Promise<AudioSource> {
+  const source = window.parrotNative
+    ? (await window.parrotNative.request<{ source: string }>("audioSource")).source
+    : localStorage.getItem("parrot.audioSource");
+  return source === "microphone" || source === "mixed" ? source : "system";
+}
+
+export async function saveAudioSource(source: AudioSource) {
+  if (window.parrotNative) {
+    await window.parrotNative.request("audioSource", { source });
+  } else {
+    localStorage.setItem("parrot.audioSource", source);
+  }
 }
 
 export async function loadAutoScroll(): Promise<boolean> {

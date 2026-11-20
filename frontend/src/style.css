@@ -516,7 +516,7 @@ button:focus-visible {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 24px 20px;
+  padding: 0 24px;
   scrollbar-width: thin;
   scrollbar-color: #e0e6f1 transparent;
 }

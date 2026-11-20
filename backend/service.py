@@ -37,9 +37,9 @@ class TranscriptionService:
         if self.busy:
             raise ValueError("已有任务运行中，请先停止并等待转写完成。")
         if platform.system() != "Darwin":
-            raise ValueError("Parrot 1.0 的系统声音采集仅支持 macOS 13+。")
+            raise ValueError("Parrot 的音频采集仅支持 macOS 13+。")
         if not CAPTURE_BINARY.exists():
-            raise ValueError("系统声音采集组件未编译，请运行 ./scripts/build-capture.sh。")
+            raise ValueError("音频采集组件未编译，请运行 ./scripts/build-capture.sh。")
         if sid is None:
             sid = self.store.create(settings)
         else:
@@ -152,13 +152,14 @@ class TranscriptionService:
                     break
             await self.capture_interval(sid, queue, chunker)
             if not self.stop_event.is_set() and not self.pause_requested:
-                raise RuntimeError("系统声音采集意外结束，请重试。")
+                raise RuntimeError("音频采集意外结束，请重试。")
 
     async def capture_interval(self, sid, queue, chunker):
         import numpy as np
 
         process = await asyncio.create_subprocess_exec(
             str(CAPTURE_BINARY),
+            "--source", self.store.get(sid)["audio_source"],
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -214,7 +215,7 @@ class TranscriptionService:
             await error_task
             if not self.stop_event.is_set() and not self.pause_requested:
                 detail = " ".join(errors[-8:])
-                raise RuntimeError(detail or "系统声音采集中断。请检查屏幕与系统音频录制权限，再重试。")
+                raise RuntimeError(detail or "音频采集中断。请检查所选音频来源的权限与设备，再重试。")
             self.process = None
         finally:
             error_task.cancel()

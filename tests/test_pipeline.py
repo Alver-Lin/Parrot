@@ -234,6 +234,33 @@ def test_existing_database_adds_markdown_column_without_losing_records(tmp_path)
 def test_invalid_settings(client):
     browser, _, _ = client
     assert browser.post("/api/sessions", json={"model": "invalid"}).status_code == 422
+    assert browser.post("/api/sessions", json={"audio_source": "invalid"}).status_code == 422
+
+
+@pytest.mark.parametrize("source", ["microphone", "system", "mixed"])
+def test_audio_source_is_saved_and_returned_for_new_records(client, source):
+    browser, store, _ = client
+    response = browser.post("/api/sessions", json={"audio_source": source, "model": "small"})
+    assert response.status_code == 201
+    sid = response.json()["id"]
+    result = wait_completed(browser, sid)
+    assert result["audio_source"] == source
+    assert result["source"] == source
+    assert browser.get("/api/sessions").json()[0]["audio_source"] == source
+    assert Store(store.root).get(sid)["audio_source"] == source
+
+
+def test_existing_records_default_to_system_audio_without_losing_content(tmp_path):
+    store = Store(tmp_path)
+    sid = store.create(Settings(title="旧版本机录音"))
+    store.update(sid, status="completed")
+    store.add_segments(sid, [{"start": 0, "end": 2, "text": "保留的原文", "review": False}])
+    with store.connect() as db:
+        db.execute("ALTER TABLE sessions DROP COLUMN audio_source")
+    migrated = Store(tmp_path)
+    record = migrated.get(sid)
+    assert record["audio_source"] == Settings(**record).audio_source == "system"
+    assert record["segments"][0]["text"] == "保留的原文"
 
 
 def test_screenshot_is_inserted_at_capture_time_and_exports_with_photo_folder(client):
@@ -629,13 +656,15 @@ def wait_status(browser, sid, expected):
 
 
 @pytest.mark.parametrize("state", ["completed", "failed", "interrupted"])
-def test_continue_history_appends_to_same_record_and_cumulative_timeline(client, monkeypatch, state):
+@pytest.mark.parametrize("source", ["microphone", "system", "mixed"])
+def test_continue_history_appends_to_same_record_and_cumulative_timeline(client, monkeypatch, state, source):
     browser, store, service = client
     monkeypatch.setattr(service, "capture_system", TranscriptionService.capture_system.__get__(service))
     processes = []
     prepared = []
 
     async def create_process(*args, **kwargs):
+        assert args[-2:] == ("--source", source)
         process = LiveCaptureProcess(0.35 if not processes else 0.45)
         processes.append(process)
         return process
@@ -646,7 +675,7 @@ def test_continue_history_appends_to_same_record_and_cumulative_timeline(client,
 
     monkeypatch.setattr("backend.service.asyncio.create_subprocess_exec", create_process)
     monkeypatch.setattr(service.recognizer, "prepare", prepare)
-    sid = store.create(Settings(title="历史课程", model="small", language="en"))
+    sid = store.create(Settings(title="历史课程", model="small", language="en", audio_source=source))
     with store.connect() as db:
         db.execute("UPDATE sessions SET vocabulary='旧版术语' WHERE id=?", (sid,))
     store.update(sid, status=state, duration=15, processed=15, error="旧错误" if state != "completed" else None)
@@ -678,7 +707,8 @@ def test_continue_history_appends_to_same_record_and_cumulative_timeline(client,
         assert "课程内容 Test." in exported
         assert not list(store.root.glob("*/*.wav"))
     assert len(result["segments"]) == 3
-    assert all(s.model == "small" and s.language == "en" and not hasattr(s, "vocabulary") for s in prepared)
+    assert all(s.model == "small" and s.language == "en" and s.audio_source == source
+               and not hasattr(s, "vocabulary") for s in prepared)
     assert "vocabulary" not in result
     assert browser.post("/api/sessions/missing/continue").status_code == 404
     unfinished = store.create(Settings())
@@ -708,19 +738,21 @@ def test_markdown_edit_keeps_transcription_added_while_typing(client, customized
 
 
 @pytest.mark.parametrize("finish", ["resume-stop", "stop-paused", "failed-resume"])
-def test_pause_controls_preserve_record_tail_and_elapsed_audio(client, monkeypatch, finish):
+@pytest.mark.parametrize("source", ["microphone", "system", "mixed"])
+def test_pause_controls_preserve_record_tail_and_elapsed_audio(client, monkeypatch, finish, source):
     browser, store, service = client
     monkeypatch.setattr(service, "capture_system", TranscriptionService.capture_system.__get__(service))
     processes = []
 
     async def create_process(*args, **kwargs):
+        assert args[-2:] == ("--source", source)
         process = LiveCaptureProcess(0.35 if not processes else 0.45,
                                      failed=bool(processes) and finish == "failed-resume")
         processes.append(process)
         return process
 
     monkeypatch.setattr("backend.service.asyncio.create_subprocess_exec", create_process)
-    sid = browser.post("/api/sessions", json={}).json()["id"]
+    sid = browser.post("/api/sessions", json={"audio_source": source}).json()["id"]
     wait_status(browser, sid, "recording")
     assert browser.post(f"/api/sessions/{sid}/resume").status_code == 409
     assert browser.post(f"/api/sessions/{sid}/pause").status_code == 202
@@ -759,6 +791,7 @@ def test_pause_controls_preserve_record_tail_and_elapsed_audio(client, monkeypat
         result = wait_status(browser, sid, "completed")
         assert result["duration"] == pytest.approx(0.35)
     assert result["segments"][0]["end"] == pytest.approx(0.35)
+    assert result["audio_source"] == source
     assert len(processes) == (1 if finish == "stop-paused" else 2)
     assert not list(store.root.glob("*/*.wav"))
     assert browser.post(f"/api/sessions/{sid}/resume").status_code == 409

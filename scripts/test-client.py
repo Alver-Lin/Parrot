@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def main():
     app = ROOT / "dist/Parrot.app"
     binary = app / "Contents/MacOS/Parrot"
+    subprocess.run([str(app / "Contents/MacOS/ParrotCapture"), "--self-test"], check=True)
     runtime = app / "Contents/Resources/runtime"
     python = os.environ.get("PARROT_PYTHON", str(ROOT / ".venv/bin/python"))
     artifacts = ROOT / ".data/client-test-artifacts"

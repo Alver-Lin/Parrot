@@ -35,6 +35,8 @@ class Store:
                 CREATE INDEX IF NOT EXISTS segments_session ON segments(session_id, start);
             """)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
+            if "audio_source" not in columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN audio_source TEXT NOT NULL DEFAULT 'system'")
             if "markdown_content" not in columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN markdown_content TEXT")
             segment_columns = {row["name"] for row in db.execute("PRAGMA table_info(segments)")}
@@ -63,17 +65,18 @@ class Store:
         sid = uuid.uuid4().hex
         with self.connect() as db:
             db.execute(
-                "INSERT INTO sessions(id,title,source,created_at,status,language,model,engine) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO sessions(id,title,source,created_at,status,language,model,engine,audio_source) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     sid,
                     settings.title,
-                    "system",
+                    settings.audio_source,
                     datetime.now(timezone.utc).isoformat(),
                     "preparing",
                     settings.language,
                     settings.model,
                     settings.engine,
+                    settings.audio_source,
                 ),
             )
         (self.root / sid).mkdir()

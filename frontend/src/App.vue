@@ -36,6 +36,7 @@ import {
   type Session,
   type Settings,
   type Status,
+  type AudioSource,
 } from "./api";
 
 import {
@@ -48,6 +49,8 @@ import {
   takeScreenshot,
   loadAutoScroll,
   saveAutoScroll,
+  loadAudioSource,
+  saveAudioSource,
   updateOrb,
 } from "./desktop";
 
@@ -69,6 +72,7 @@ const headerTooltipProps = {
 
 const settings = reactive<Settings>({
   title: "",
+  audio_source: "system",
   language: "zh",
   model: "large-v3",
   engine: "auto",
@@ -83,7 +87,8 @@ const connected = ref(false);
 const initialLoading = ref(true);
 const networkError = ref("");
 const helpOpen = ref(false);
-const capturePermissionDenied = ref(false);
+const capturePermissionDenied = ref<AudioSource | null>(null);
+const audioSourceLoading = ref(true);
 const transcript = ref<HTMLElement>();
 const autoScroll = ref(true);
 const autoScrollLoading = ref(true);
@@ -94,7 +99,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 let selectionRevision = 0;
 const activeStates = ["preparing", "recording", "pausing", "paused", "resuming", "stopping"];
-const busy = computed(() => !!status.value?.active_id || pending.value);
+const busy = computed(() => !!status.value?.active_id || pending.value || audioSourceLoading.value);
 const modelLoading = computed(() => status.value?.model.status === "loading");
 const currentActive = computed(
   () => !!selected.value && activeStates.includes(selected.value.status),
@@ -211,9 +216,14 @@ const modelOptions = [
   { value: "small", label: "Small · 低内存" },
 ];
 const languageOptions = [
-  { value: "zh", label: "中文（可包含英文术语）" },
+  { value: "zh", label: "中文" },
   { value: "en", label: "英语" },
   { value: "auto", label: "自动检测语言" },
+];
+const audioSourceOptions = [
+  { value: "microphone", label: "识别麦克风音频" },
+  { value: "system", label: "识别本机音频" },
+  { value: "mixed", label: "识别麦克风与本机音频" },
 ];
 const selectedEngine = computed(() => settings.engine === "auto"
   ? status.value?.model_cache.auto_engine : settings.engine);
@@ -364,11 +374,12 @@ async function start() {
   const revision = selectionRevision;
   pending.value = true;
   try {
-    if (!(await ensureCapturePermission())) {
-      capturePermissionDenied.value = true;
+    capturePermissionDenied.value = null;
+    const permission = await ensureCapturePermission(session?.audio_source ?? settings.audio_source);
+    if (!permission.granted) {
+      capturePermissionDenied.value = permission.source;
       return;
     }
-    capturePermissionDenied.value = false;
     if (selectionRevision !== revision) return;
     if (session) {
       await saveMarkdownDraft(session.id);
@@ -584,9 +595,31 @@ async function changeAutoScroll(value: boolean | string | number) {
   }
 }
 
+async function changeAudioSource(source: AudioSource) {
+  const previous = settings.audio_source;
+  settings.audio_source = source;
+  audioSourceLoading.value = true;
+  try {
+    await saveAudioSource(source);
+    capturePermissionDenied.value = null;
+  } catch (error) {
+    settings.audio_source = previous;
+    showError(error);
+  } finally {
+    audioSourceLoading.value = false;
+  }
+}
+
 onMounted(async () => {
   window.addEventListener("parrot-open-settings", openSettings);
   void refresh();
+  try {
+    settings.audio_source = await loadAudioSource();
+  } catch (error) {
+    showError(error);
+  } finally {
+    audioSourceLoading.value = false;
+  }
   try {
     autoScroll.value = await loadAutoScroll();
   } catch (error) {
@@ -678,11 +711,13 @@ onUnmounted(() => {
         class="notice"
         type="warning"
         show-icon
-        message="需要允许系统声音采集"
-        description="请在系统设置中允许 Parrot，然后从菜单栏退出并重新打开。若开关已开启，请删除旧的 Parrot 条目，重新添加当前应用并授权。"
+        :message="capturePermissionDenied === 'microphone' ? '需要允许麦克风采集' : '需要允许本机声音采集'"
+        :description="capturePermissionDenied === 'microphone'
+          ? '请在系统设置 → 隐私与安全性 → 麦克风中允许 Parrot，然后重试。'
+          : '请在系统设置中允许 Parrot，然后从菜单栏退出并重新打开。若开关已开启，请删除旧的 Parrot 条目，重新添加当前应用并授权。'"
       >
         <template #action>
-          <a-button size="small" @click="openCaptureSettings().catch(showError)">打开权限设置</a-button>
+          <a-button size="small" @click="openCaptureSettings(capturePermissionDenied ?? 'system').catch(showError)">打开权限设置</a-button>
         </template>
       </a-alert>
       <a-alert
@@ -693,8 +728,8 @@ onUnmounted(() => {
         :message="statusNames[selected.status]"
         :description="selected.error"
       >
-        <template v-if="isDesktop && selected.error.includes('系统声音权限未生效')" #action>
-          <a-button size="small" @click="openCaptureSettings().catch(showError)">打开权限设置</a-button>
+        <template v-if="isDesktop && (selected.error.includes('系统声音权限未生效') || selected.error.includes('麦克风权限未生效'))" #action>
+          <a-button size="small" @click="openCaptureSettings(selected.error.includes('麦克风权限未生效') ? 'microphone' : 'system').catch(showError)">打开权限设置</a-button>
         </template>
       </a-alert>
 
@@ -1070,6 +1105,17 @@ onUnmounted(() => {
         wrap-class-name="client-modal"
       >
         <a-form layout="vertical" :disabled="busy || modelLoading">
+          <a-form-item label="音频来源">
+            <a-select
+              id="audio-source-select"
+              aria-label="音频来源"
+              :value="settings.audio_source"
+              :options="audioSourceOptions"
+              :disabled="busy || modelLoading || audioSourceLoading"
+              @change="changeAudioSource"
+            />
+            <p class="field-help">新记录使用此来源；续写历史记录沿用原来源。双声源模式建议戴耳机，避免重复收音。</p>
+          </a-form-item>
           <div class="settings-pair">
             <a-form-item label="音频语言"
               ><a-select
@@ -1131,11 +1177,10 @@ onUnmounted(() => {
             Parrot
             悬浮在屏幕上。点击展开面板，可拖动到屏幕任意位置，松手后保持当前位置。点击「开始聆听」，等状态变为「正在聆听」后再播放课程。
           </p>
-          <h3>2. 完成系统声音权限授权</h3>
+          <h3>2. 选择音频来源并授权</h3>
           <p>
-            在「系统设置 → 隐私与安全性 → 屏幕与系统音频录制」中允许
-            Parrot，必要时退出并重新打开客户端。仅支持 macOS 13
-            及以上，不采集麦克风。
+            在识别设置中选择麦克风、本机音频或两者。使用麦克风时需允许麦克风权限，使用本机音频时需在「系统设置 → 隐私与安全性 → 屏幕与系统音频录制」中允许
+            Parrot。双声源模式建议戴耳机，避免电脑外放被麦克风重复采集。仅支持 macOS 13 及以上。
           </p>
           <h3>3. 收起面板，保持专注</h3>
           <p>

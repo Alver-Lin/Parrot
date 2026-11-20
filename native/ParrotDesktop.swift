@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreGraphics
 import Darwin
 import Foundation
@@ -513,6 +514,8 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     var pendingSettings = false
     var copiedForTest: String?
     var autoScrollForTest = true
+    var audioSourceForTest = "system"
+    var permissionSourcesForTest: [String] = []
     var screenshotInProgress = false
     var screenshotProcess: Process?
     var activity: NSObjectProtocol?
@@ -871,8 +874,26 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
     }
 
     @objc func openCaptureSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
+        openAudioPrivacySettings(source: "system")
+    }
+
+    func openAudioPrivacySettings(source: String) {
+        let pane = source == "microphone" ? "Privacy_Microphone" : "Privacy_ScreenCapture"
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    func requestAudioPermission(source: String, replyID: String?) async {
+        if selfTesting {
+            permissionSourcesForTest.append(source)
+            reply(replyID, value: ["granted": true, "source": source]); return
+        }
+        if source != "system" {
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            if !granted { reply(replyID, value: ["granted": false, "source": "microphone"]); return }
+        }
+        let granted = source == "microphone" || CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
+        reply(replyID, value: ["granted": granted, "source": source == "microphone" ? "microphone" : "system"])
     }
 
     @objc func openSettings() {
@@ -897,6 +918,16 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         let id = body["id"] as? String
         switch action {
+        case "audioSource":
+            if let source = body["source"] as? String {
+                guard ["microphone", "system", "mixed"].contains(source) else {
+                    reply(id, error: "音频来源无效"); return
+                }
+                if selfTesting { audioSourceForTest = source }
+                else { UserDefaults.standard.set(source, forKey: "audioSource") }
+            }
+            reply(id, value: ["source": selfTesting ? audioSourceForTest
+                              : UserDefaults.standard.string(forKey: "audioSource") ?? "system"])
         case "autoScroll":
             if selfTesting {
                 if let enabled = body["enabled"] as? Bool { autoScrollForTest = enabled }
@@ -911,10 +942,13 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
         case "capturePermission":
             // Only a direct Start action requests access. Do not prompt on launch
             // or from the once-per-second status poll.
-            let granted = selfTesting || CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
-            reply(id, value: ["granted": granted])
+            let source = body["source"] as? String ?? "system"
+            guard ["microphone", "system", "mixed"].contains(source) else {
+                reply(id, error: "音频来源无效"); return
+            }
+            Task { await requestAudioPermission(source: source, replyID: id) }
         case "openCaptureSettings":
-            if !selfTesting { openCaptureSettings() }
+            if !selfTesting { openAudioPrivacySettings(source: body["source"] as? String ?? "system") }
             reply(id, value: ["opened": true])
         case "collapse": hideWorkspace(animated: !selfTesting)
         case "state":
@@ -1308,7 +1342,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               exportButton.click();
               await new Promise(resolve => setTimeout(resolve, 1500));
               return document.querySelector('.markdown-editor')?.value === content
-                && document.querySelector('[aria-label="保存 Markdown"]')?.textContent.includes('已保存');
+                && !document.querySelector('[aria-label="保存 Markdown"]');
             """, arguments: ["content": editedMarkdown], in: nil, contentWorld: .page) as? Bool
             guard markdownEditWorks == true else { throw appError("Markdown 编辑或自动保存失败") }
             guard copiedForTest == editedMarkdown else { throw appError("复制没有使用编辑后的 Markdown") }
@@ -1385,6 +1419,31 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             try await Task.sleep(nanoseconds: 300_000_000)
             let settingsVisible = try await webView.evaluateJavaScript("!!document.querySelector('.ant-modal-content')") as? Bool
             guard settingsVisible == true else { throw appError("设置面板未打开") }
+            let audioSourcesWork = try await webView.callAsyncJavaScript("""
+              const labels = ['识别麦克风音频', '识别本机音频', '识别麦克风与本机音频'];
+              const sources = ['microphone', 'system', 'mixed'];
+              const select = document.querySelector('#audio-source-select')?.closest('.ant-select');
+              if (!select || !select.textContent.includes('识别本机音频')) return false;
+              for (let i = 0; i < sources.length; i++) {
+                select.querySelector('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+                await new Promise(resolve => setTimeout(resolve, 150));
+                const option = Array.from(document.querySelectorAll('.ant-select-item-option'))
+                  .find(node => node.title === labels[i]);
+                if (!option) return false;
+                option.click();
+                await new Promise(resolve => setTimeout(resolve, 200));
+                const saved = await window.parrotNative.request('audioSource');
+                if (saved.source !== sources[i] || !select.textContent.includes(labels[i])) return false;
+              }
+              return true;
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard audioSourcesWork == true else { throw appError("音频来源三选项未正确展示或保存") }
+            try await Task.sleep(nanoseconds: 500_000_000)
+            if let image = try? await webView.takeSnapshot(configuration: nil),
+               let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+               let png = bitmap.representation(using: .png, properties: [:]) {
+                try png.write(to: selfTestDirectory.appendingPathComponent("desktop-settings.png"))
+            }
             let downloadedModelStatus = try await webView.callAsyncJavaScript("""
               const originalFetch = window.fetch;
               window.fetch = async (input, options) => {
@@ -1416,6 +1475,26 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
             guard autoScrollWorks == true else { throw appError("识别设置中的自动跟随开关未正确保存") }
             _ = try await webView.evaluateJavaScript("document.querySelector('#auto-scroll-switch')?.closest('.ant-modal-content')?.querySelector('.ant-modal-close')?.click()")
             try await Task.sleep(nanoseconds: 300_000_000)
+            let sourceRequestWorks = try await webView.callAsyncJavaScript("""
+              document.querySelector('[aria-label="新建学习记录"]').click();
+              await new Promise(resolve => setTimeout(resolve, 150));
+              const originalFetch = window.fetch;
+              let source;
+              window.fetch = async (input, options) => {
+                if (options?.method === 'POST' && new URL(String(input), location.href).pathname === '/api/sessions') {
+                  source = JSON.parse(options.body).audio_source;
+                  return originalFetch('/api/sessions/' + sid, {headers: options.headers});
+                }
+                return originalFetch(input, options);
+              };
+              try {
+                document.querySelector('[aria-label="开始聆听"]').click();
+                await new Promise(resolve => setTimeout(resolve, 650));
+                return source === 'mixed';
+              } finally { window.fetch = originalFetch; }
+            """, arguments: ["sid": sid], in: nil, contentWorld: .page) as? Bool
+            guard sourceRequestWorks == true, permissionSourcesForTest.first == "system",
+                  permissionSourcesForTest.last == "mixed" else { throw appError("新记录未使用所选音频来源及对应权限") }
             let image = try await webView.takeSnapshot(configuration: nil)
             if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
                 try png.write(to: selfTestDirectory.appendingPathComponent("desktop-panel.png"))
