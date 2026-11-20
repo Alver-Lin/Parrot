@@ -34,7 +34,7 @@ import {
   api,
   time,
   toMarkdown,
-  fetchMarkdown,
+  fetchPolishSource,
   type Segment,
   type Session,
   type Settings,
@@ -405,10 +405,11 @@ async function preparePolishDocument(id: string) {
   await saveMarkdownDraft(id);
   if (markdownDrafts[id]?.error) throw new Error("请先保存当前文稿，再进行润色");
   const localContent = markdown.value;
-  const source = await fetchMarkdown(id);
-  if (selected.value?.id !== id || selectionRevision !== revision || markdown.value !== localContent)
+  const prepared = await fetchPolishSource(id);
+  if (selected.value?.id !== id || selectionRevision !== revision || markdown.value !== localContent
+      || prepared.base_content !== localContent)
     throw new Error("文稿已变化，请重新点击 AI 润色");
-  return { source, localContent };
+  return { source: prepared.source, baseContent: prepared.base_content, localContent };
 }
 
 function acceptPolishedSession(detail: Session) {
@@ -422,13 +423,13 @@ function acceptPolishedSession(detail: Session) {
   if (item) item.title = detail.title;
 }
 
-async function applyPolishResult(id: string, content: string, source: string, localContent: string) {
+async function applyPolishResult(id: string, content: string, baseContent: string, localContent: string) {
   if (selected.value?.id !== id || markdown.value !== localContent || currentActive.value)
     throw new Error("原文已变化，润色预览已保留，请重新生成");
   await saveMarkdownDraft(id);
   if (markdownDrafts[id]?.error) throw new Error("请先保存当前文稿");
   const detail = await api<Session>(`/sessions/${id}/polish/apply`, {
-    method: "POST", body: JSON.stringify({ content, base_content: source }),
+    method: "POST", body: JSON.stringify({ content, base_content: baseContent }),
   });
   acceptPolishedSession(detail);
 }

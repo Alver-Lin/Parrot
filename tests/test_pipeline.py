@@ -284,7 +284,7 @@ def test_polish_accepts_changed_photo_references_and_still_preserves_parallel_ed
     assert browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": polished, "base_content": original}).status_code == 409
     assert browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": polished}).status_code == 409
     assert store.get(sid)["markdown_content"].endswith("手动新内容。")
-    assert store.get(sid)["polish_revision"] is None
+    assert store.get(sid)["polish_revision"] == revision
     assert browser.post("/api/sessions/missing/polish/apply", json={"content": "x", "base_content": ""}).status_code == 404
 
 
@@ -296,6 +296,7 @@ def test_polish_cannot_apply_while_transcribing(client, state):
     original = browser.get(f"/api/sessions/{sid}/markdown").text
     assert browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": original + "x", "base_content": original}).status_code == 409
     assert store.get(sid)["markdown_content"] is None
+    assert browser.get(f"/api/sessions/{sid}/polish/source").status_code == 409
 
 
 def test_polish_history_is_removed_with_the_record(client):
@@ -935,15 +936,131 @@ def test_study_notes_can_reorder_photos_and_update_title_with_exact_undo(client)
     assert applied.json()["segments"] == before["segments"]
     for segment in before["segments"]:
         assert browser.get(f"/api/sessions/{sid}/photo/{segment['photo_filename']}").content == image
-    for changed in [result.replace(photos[0], ""), result + photos[0], result.replace("photo/", "photo/new-")]:
-        saved = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": changed, "base_content": result})
+    for index, changed in enumerate([result.replace(photos[0], ""), result + photos[0], result.replace("photo/", "photo/new-")]):
+        base = result if index == 0 else original
+        saved = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": changed, "base_content": base})
         assert saved.status_code == 200
         assert saved.json()["markdown_content"] == changed
-        assert browser.post(f"/api/sessions/{sid}/polish/undo", json={
+        undone = browser.post(f"/api/sessions/{sid}/polish/undo", json={
             "revision_id": saved.json()["polish_revision"], "base_content": changed,
-        }).status_code == 200
+        })
+        assert undone.status_code == 200
+        assert undone.json()["markdown_content"] == original
+        assert undone.json()["title"] == "学习记录"
+
+
+def test_repeated_polish_always_uses_original_and_restore_skips_all_polished_versions(client):
+    browser, store, _ = client
+    sid = store.create(Settings(title="原始记录"))
+    store.update(sid, status="completed")
+    original = "# 原始记录\r\n\r\n最初的口播内容。\r\n"
+    store.save_markdown(sid, original)
+    assert browser.get(f"/api/sessions/{sid}/polish/source").json() == {"source": original, "base_content": original}
+    first = "# 第一版笔记\n\n第一次整理。"
+    second = "# 第二版笔记\n\n第二次整理。"
+    one = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": first, "base_content": original})
+    assert one.status_code == 200
+    assert browser.get(f"/api/sessions/{sid}/polish/source").json() == {"source": original, "base_content": first}
+    two = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": second, "base_content": first})
+    assert two.status_code == 200
+    assert Store(store.root).polish_source(sid) == {"source": original, "base_content": second}
+    restored = browser.post(f"/api/sessions/{sid}/polish/undo", json={
+        "revision_id": two.json()["polish_revision"], "base_content": second,
+    })
+    assert restored.status_code == 200
+    assert restored.json()["markdown_content"] == original
+    assert restored.json()["title"] == "原始记录"
+    assert restored.json()["polish_revision"] is None
+    assert browser.post(f"/api/sessions/{sid}/polish/undo", json={
+        "revision_id": one.json()["polish_revision"], "base_content": original,
+    }).status_code == 409
+    assert browser.get(f"/api/sessions/{sid}/polish/source").json()["source"] == original
+    with store.connect() as db:
+        assert all(row["original_content"] == original for row in db.execute(
+            "SELECT original_content FROM markdown_polishes WHERE session_id=?", (sid,),
+        ))
+
+
+def test_preparing_does_not_freeze_source_until_first_apply_and_saved_edits_can_be_restored(client):
+    browser, store, _ = client
+    sid = store.create(Settings(title="原始名称"))
+    store.update(sid, status="completed")
+    store.save_markdown(sid, "最早草稿。")
+    assert browser.get(f"/api/sessions/{sid}/polish/source").json()["source"] == "最早草稿。"
+    original = "第一次润色前最终保存的原始正文。"
+    store.save_markdown(sid, original)
+    assert browser.get(f"/api/sessions/{sid}/polish/source").json()["source"] == original
+    polished = "# AI 标题\n\n整理后的内容。"
+    applied = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": polished, "base_content": original})
     revision = applied.json()["polish_revision"]
-    undone = browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": result})
-    assert undone.status_code == 200
-    assert undone.json()["markdown_content"] == original
-    assert undone.json()["title"] == "学习记录"
+    manual = polished + "\n手写补充。"
+    store.save_markdown(sid, manual)
+    prepared = browser.get(f"/api/sessions/{sid}/polish/source").json()
+    assert prepared == {"source": original, "base_content": manual}
+    assert browser.post(f"/api/sessions/{sid}/polish/undo", json={
+        "revision_id": revision, "base_content": polished,
+    }).status_code == 409
+    restored = browser.post(f"/api/sessions/{sid}/polish/undo", json={"revision_id": revision, "base_content": manual})
+    assert restored.status_code == 200
+    assert restored.json()["markdown_content"] == original
+    assert restored.json()["title"] == "原始名称"
+    with store.connect() as db:
+        assert db.execute("SELECT 1 FROM markdown_polishes WHERE session_id=? AND result_content=?",
+                          (sid, manual)).fetchone()
+    store.save_markdown(sid, "恢复原文后的手写修改。")
+    assert browser.get(f"/api/sessions/{sid}/polish/source").json()["source"] == original
+
+
+def test_legacy_polish_chain_migrates_to_earliest_original_without_replacing_current_notes(client):
+    browser, store, _ = client
+    sid = store.create(Settings(title="第二版标题"))
+    store.update(sid, status="completed")
+    original = "# 最早原文\n\n原始口播。"
+    first = "# 第一版标题\n\n第一次润色。"
+    second = "# 第二版标题\n\n第二次润色。"
+    with store.connect() as db:
+        db.execute("UPDATE sessions SET markdown_content=? WHERE id=?", (second, sid))
+        for before, after in [(original, first), (first, second)]:
+            db.execute("INSERT INTO markdown_polishes(session_id,original_content,result_content,created_at) VALUES(?,?,?,?)",
+                       (sid, before, after, "2026-11-20T12:00:00+00:00"))
+        db.execute("ALTER TABLE sessions DROP COLUMN polish_original_content")
+        db.execute("ALTER TABLE sessions DROP COLUMN polish_original_title")
+    migrated = Store(store.root)
+    assert migrated.get(sid)["markdown_content"] == second
+    assert migrated.polish_source(sid) == {"source": original, "base_content": second}
+    revision = migrated.get(sid)["polish_revision"]
+    assert migrated.apply_polish(sid, "", second, revision_id=revision)
+    assert migrated.get(sid)["markdown_content"] == original
+    assert migrated.get(sid)["title"] == "最早原文"
+    assert Store(store.root).polish_source(sid)["source"] == original
+    assert browser.get("/api/sessions/missing/polish/source").status_code == 404
+
+
+def test_original_polish_source_includes_new_transcription_and_current_screenshot_files(client):
+    browser, store, _ = client
+    sid = store.create(Settings(title="原始课程"))
+    store.update(sid, status="completed", duration=5)
+    store.add_segments(sid, [{"start": 0, "end": 3, "text": "原始第一段。", "review": False}])
+    picture = browser.post(f"/api/sessions/{sid}/screenshots?at=4", content=png_bytes(),
+                           headers={"Content-Type": "image/png"}).json()["segments"][-1]
+    original = browser.get(f"/api/sessions/{sid}/markdown").text
+    polished = "# AI 整理\n\n这是润色笔记。"
+    applied = browser.post(f"/api/sessions/{sid}/polish/apply", json={"content": polished, "base_content": original})
+    assert applied.status_code == 200
+    store.update(sid, duration=10)
+    store.add_segments(sid, [{"start": 6, "end": 9, "text": "续写新增内容。", "review": False}])
+    source = store.polish_source(sid)["source"]
+    assert "原始第一段。" in source and "续写新增内容。" in source
+    assert "AI 整理" not in source and "这是润色笔记。" not in source
+    assert "音频时长：00:00:10" in source
+    assert store.replace_screenshot(sid, picture["id"], png_bytes())
+    updated = store.get(sid)
+    current_photo = next(segment for segment in updated["segments"] if segment["kind"] == "image")
+    source = store.polish_source(sid)["source"]
+    assert picture["photo_filename"] not in source
+    assert current_photo["photo_filename"] in source
+    assert store.delete_segment(sid, current_photo["id"])
+    prepared = store.polish_source(sid)
+    assert "photo/" not in prepared["source"]
+    assert store.apply_polish(sid, "", prepared["base_content"], revision_id=updated["polish_revision"])
+    assert store.get(sid)["markdown_content"] == prepared["source"]

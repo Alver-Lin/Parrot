@@ -308,6 +308,17 @@ async def edit_markdown(sid: str, body: EditMarkdown):
     return {"ok": True, "title": session["title"], "content": session["markdown_content"]}
 
 
+@app.get("/api/sessions/{sid}/polish/source")
+async def polish_source(sid: str):
+    try:
+        result = store.polish_source(sid)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "记录不存在")
+    return result
+
+
 @app.post("/api/sessions/{sid}/polish/apply")
 async def apply_polish(sid: str, body: ApplyPolish):
     try:

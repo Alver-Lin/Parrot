@@ -94,6 +94,10 @@ export async function fetchMarkdown(id: string) {
   return response.text();
 }
 
+export function fetchPolishSource(id: string) {
+  return api<{ source: string; base_content: string }>(`/sessions/${id}/polish/source`);
+}
+
 export function toMarkdown(session: Session) {
   if (session.markdown_content != null) return session.markdown_content;
   const lines = [

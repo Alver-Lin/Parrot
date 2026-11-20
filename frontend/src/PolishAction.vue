@@ -9,8 +9,8 @@ import { usePolishSettings } from "./usePolishSettings";
 
 const props = defineProps<{
   sessionId: string; content: string; active: boolean; unsaved: boolean; revisionId?: number | null;
-  prepare: (id: string) => Promise<{ source: string; localContent: string }>;
-  apply: (id: string, content: string, source: string, localContent: string) => Promise<void>;
+  prepare: (id: string) => Promise<{ source: string; baseContent: string; localContent: string }>;
+  apply: (id: string, content: string, baseContent: string, localContent: string) => Promise<void>;
   undo: (id: string, revision: number) => Promise<void>;
 }>();
 const emit = defineEmits<{ "open-settings": [] }>();
@@ -24,6 +24,7 @@ const running = ref(false);
 const error = ref("");
 const result = ref("");
 const source = ref("");
+const baseContent = ref("");
 const localContent = ref("");
 const sessionId = ref("");
 const progress = ref({ done: 0, total: 0 });
@@ -57,6 +58,7 @@ async function showDialog() {
     plan = createPolishPlan(prepared.source);
     sessionId.value = id;
     source.value = prepared.source;
+    baseContent.value = prepared.baseContent;
     localContent.value = prepared.localContent;
     result.value = "";
     progress.value = { done: 0, total: 0 };
@@ -79,7 +81,7 @@ async function generate() {
     const restored = restorePolishPlan(plan, response.chunks);
     result.value = restored.content;
     saved.value = response.settings;
-    if (restored.content === source.value) message.info("文稿无需调整，已保留原文");
+    if (restored.content === baseContent.value) message.info("生成结果与当前文稿一致");
   } catch (cause) {
     if (!cancelled && !disposed) {
       error.value = cause instanceof Error ? cause.message : "润色失败，原文未改动";
@@ -110,9 +112,9 @@ async function applyResult() {
   applying.value = true;
   error.value = "";
   try {
-    await props.apply(sessionId.value, result.value, source.value, localContent.value);
+    await props.apply(sessionId.value, result.value, baseContent.value, localContent.value);
     open.value = false;
-    message.success("润色已应用，可撤销恢复原文");
+    message.success("润色已应用，可恢复原始版本");
   } catch (cause) { error.value = cause instanceof Error ? cause.message : "应用失败，预览已保留"; }
   finally { applying.value = false; }
 }
@@ -122,7 +124,7 @@ async function undo() {
   undoing.value = true;
   try {
     await props.undo(props.sessionId, props.revisionId);
-    message.success("已撤销润色，恢复原文");
+    message.success("已恢复原始版本");
   } catch (cause) { message.error(cause instanceof Error ? cause.message : "撤销失败"); }
   finally { undoing.value = false; }
 }
@@ -142,8 +144,8 @@ onUnmounted(() => {
 
 <template>
   <span class="polish-button-group">
-    <a-tooltip v-if="revisionId" title="撤销上次 AI 润色">
-      <a-button type="text" size="small" aria-label="撤销 AI 润色" :loading="undoing"
+    <a-tooltip v-if="revisionId" title="恢复原始版本">
+      <a-button type="text" size="small" aria-label="恢复原始版本" :loading="undoing"
         :disabled="active || unsaved || frozen || running" @click="undo"><UndoOutlined /></a-button>
     </a-tooltip>
     <a-tooltip :open="tooltipOpen && !open && !frozen && !running" @openChange="onTooltipOpenChange"
@@ -158,7 +160,7 @@ onUnmounted(() => {
     <a-alert v-if="error" class="polish-result-error" type="error" show-icon :message="error" />
     <p v-if="running" class="polish-progress" role="status">{{ progressLabel }}，原文尚未改动。</p>
     <div class="polish-comparison" :class="{ 'has-result': !!result }">
-      <section><h3>原文</h3><MarkdownPreview :content="source" :session-id="sessionId" /></section>
+      <section><h3>原始版本</h3><MarkdownPreview :content="source" :session-id="sessionId" /></section>
       <section v-if="result"><h3>润色后</h3><MarkdownPreview :content="result" :session-id="sessionId" /></section>
     </div>
     <div class="polish-result-actions">
@@ -166,7 +168,7 @@ onUnmounted(() => {
       <a-button v-if="!result" type="primary" aria-label="开始 AI 润色" :loading="running"
         :disabled="changed || running || applying" @click="generate">开始润色</a-button>
       <a-button v-else type="primary" aria-label="应用 AI 润色" :loading="applying"
-        :disabled="changed || running || applying || result === source" @click="applyResult">应用润色</a-button>
+        :disabled="changed || running || applying || result === baseContent" @click="applyResult">应用润色</a-button>
     </div>
   </a-modal>
 </template>

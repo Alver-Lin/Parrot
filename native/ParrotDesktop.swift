@@ -1818,18 +1818,41 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
               document.querySelector('[aria-label="应用 AI 润色"]').click();
               await new Promise(resolve => setTimeout(resolve, 400));
               return document.querySelector('.markdown-editor')?.value.includes('已润色')
-                && !!document.querySelector('[aria-label="撤销 AI 润色"]');
+                && !!document.querySelector('[aria-label="恢复原始版本"]');
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
             guard polishApplyWorks == true else { throw appError("应用润色后文稿或撤销入口无效") }
             let afterPolish = try await requestJSON("/api/sessions/\(sid)")
             guard (afterPolish["markdown_content"] as? String)?.contains(expectedPhoto) == true else { throw appError("润色后截图引用丢失") }
             let afterPolishPhoto = try await request("/api/sessions/\(sid)/photo/\(photoFilename)")
             guard afterPolishPhoto.0 == photoData else { throw appError("润色不应改变截图文件") }
-            let polishUndoWorks = try await webView.callAsyncJavaScript("""
-              document.querySelector('[aria-label="撤销 AI 润色"]').click();
+            let beforeRepeatRequests = polishSettings.requestsForTest.count
+            polishSettings.completionTextForTest = originalPolishText + "\n（第二次润色）"
+            let repeatedPolishWorks = try await webView.callAsyncJavaScript("""
+              document.querySelector('[aria-label="AI 润色"]').click();
               await new Promise(resolve => setTimeout(resolve, 400));
-              return !document.querySelector('.markdown-editor')?.value.includes('已润色')
-                && !document.querySelector('[aria-label="撤销 AI 润色"]');
+              const originalPane = document.querySelector('.polish-comparison section');
+              if (!originalPane?.textContent.includes('原始版本') || originalPane.textContent.includes('已润色')) return false;
+              document.querySelector('[aria-label="开始 AI 润色"]').click();
+              await new Promise(resolve => setTimeout(resolve, 600));
+              const result = document.querySelectorAll('.polish-comparison section')[1];
+              if (!result?.textContent.includes('第二次润色') || result.textContent.includes('已润色')) return false;
+              document.querySelector('[aria-label="应用 AI 润色"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              return document.querySelector('.markdown-editor')?.value.includes('第二次润色')
+                && !!document.querySelector('[aria-label="恢复原始版本"]');
+            """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+            guard repeatedPolishWorks == true else { throw appError("再次润色未使用原始版本或无法应用新结果") }
+            let repeatRequests = Array(polishSettings.requestsForTest.dropFirst(beforeRepeatRequests))
+            guard !repeatRequests.isEmpty, repeatRequests.allSatisfy({ request in
+                !(String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "").contains("已润色")
+            }) else { throw appError("再次润色不应将上次润色结果发送给模型") }
+            polishSettings.completionTextForTest = nil
+            let polishUndoWorks = try await webView.callAsyncJavaScript("""
+              document.querySelector('[aria-label="恢复原始版本"]').click();
+              await new Promise(resolve => setTimeout(resolve, 400));
+              return !document.querySelector('.markdown-editor')?.value.includes('第二次润色')
+                && !document.querySelector('.markdown-editor')?.value.includes('已润色')
+                && !document.querySelector('[aria-label="恢复原始版本"]');
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
             guard polishUndoWorks == true else { throw appError("撤销润色未恢复原文") }
             let afterUndo = try await requestJSON("/api/sessions/\(sid)")

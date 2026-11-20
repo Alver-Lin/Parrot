@@ -47,17 +47,56 @@ class Store:
                 db.execute("ALTER TABLE sessions ADD COLUMN audio_source TEXT NOT NULL DEFAULT 'system'")
             if "markdown_content" not in columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN markdown_content TEXT")
+            for field in ("polish_original_content", "polish_original_title"):
+                if field not in columns:
+                    db.execute(f"ALTER TABLE sessions ADD COLUMN {field} TEXT")
             segment_columns = {row["name"] for row in db.execute("PRAGMA table_info(segments)")}
             if "kind" not in segment_columns:
                 db.execute("ALTER TABLE segments ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'")
             if "photo_filename" not in segment_columns:
                 db.execute("ALTER TABLE segments ADD COLUMN photo_filename TEXT")
+            self._restore_polish_origins(db)
             self._normalize_creation_headers(db)
             db.execute(
                 "UPDATE sessions SET status='interrupted', error=? "
                 "WHERE status IN ('preparing','recording','pausing','paused','resuming','transcribing','stopping')",
                 ("服务已重启。已完成的文字仍保留，可校对并导出。",),
             )
+
+    @staticmethod
+    def _restore_polish_origins(db):
+        # Earlier clients stored a chain of pre-edit snapshots. The earliest one is the source.
+        for row in db.execute(
+            "SELECT s.id,s.title,p.original_content FROM sessions s JOIN markdown_polishes p "
+            "ON p.id=(SELECT MIN(id) FROM markdown_polishes WHERE session_id=s.id) "
+            "WHERE s.polish_original_content IS NULL"
+        ).fetchall():
+            db.execute("UPDATE sessions SET polish_original_content=?,polish_original_title=? WHERE id=?",
+                       (row["original_content"], markdown_title(row["original_content"]) or row["title"], row["id"]))
+
+    @staticmethod
+    def _polish_source(db, session):
+        if session.get("polish_original_content") is not None:
+            return session["polish_original_content"]
+        first = db.execute(
+            "SELECT original_content FROM markdown_polishes WHERE session_id=? ORDER BY id LIMIT 1",
+            (session["id"],),
+        ).fetchone()
+        return first["original_content"] if first else markdown(session)
+
+    def polish_source(self, sid):
+        with self.connect() as db:
+            db.execute("BEGIN")
+            row = db.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row is None:
+                return None
+            if row["status"] not in {"completed", "failed", "interrupted"}:
+                raise ValueError("请先结束这条记录的转写，再进行润色。")
+            session = dict(row)
+            session["segments"] = [dict(segment) for segment in db.execute(
+                "SELECT * FROM segments WHERE session_id=? ORDER BY start,id", (sid,),
+            )]
+            return {"source": self._polish_source(db, session), "base_content": markdown(session)}
 
     @staticmethod
     def _normalize_creation_headers(db):
@@ -69,6 +108,13 @@ class Store:
             content = normalize_creation_header(row["markdown_content"], row["created_at"])
             if content != row["markdown_content"]:
                 db.execute("UPDATE sessions SET markdown_content=? WHERE id=?", (content, row["id"]))
+        for row in db.execute(
+            "SELECT id,created_at,polish_original_content FROM sessions "
+            "WHERE instr(polish_original_content, '- 创建时间：' || created_at) > 0"
+        ).fetchall():
+            original = normalize_creation_header(row["polish_original_content"], row["created_at"])
+            if original != row["polish_original_content"]:
+                db.execute("UPDATE sessions SET polish_original_content=? WHERE id=?", (original, row["id"]))
         for row in db.execute(
             "SELECT p.id,s.created_at,p.original_content,p.result_content "
             "FROM markdown_polishes p JOIN sessions s ON s.id=p.session_id "
@@ -140,8 +186,10 @@ class Store:
                 "ORDER BY id DESC LIMIT 1", (sid,),
             ).fetchone()
             result["polish_revision"] = (
-                revision["id"] if revision and revision["result_content"] == markdown(result) else None
+                revision["id"] if revision and markdown(result) != self._polish_source(db, result) else None
             )
+            result.pop("polish_original_content", None)
+            result.pop("polish_original_title", None)
             return result
 
     def get_status(self, sid):
@@ -160,6 +208,8 @@ class Store:
             ]
             for record in records:
                 record.pop("vocabulary", None)
+                record.pop("polish_original_content", None)
+                record.pop("polish_original_title", None)
                 record["title"] = markdown_title(record.get("markdown_content")) or record["title"]
             return records
 
@@ -176,6 +226,23 @@ class Store:
                 if row is not None and row["markdown_content"] is not None:
                     db.execute("UPDATE sessions SET markdown_content=? WHERE id=?",
                                (append_markdown(row["markdown_content"], added), sid))
+                self._append_polish_source(db, sid, added)
+
+    @staticmethod
+    def _append_polish_source(db, sid, added):
+        row = db.execute("SELECT polish_original_content,duration FROM sessions WHERE id=?", (sid,)).fetchone()
+        if row and row["polish_original_content"] is not None and added:
+            content = append_markdown(row["polish_original_content"], added)
+            # Only refresh the generated duration in the metadata header.
+            lines = content.splitlines(keepends=True)
+            for index, line in enumerate(lines):
+                plain = line.rstrip("\r\n")
+                if re.match(r"#{2,6}[ \t]+|`{3,}|~{3,}", plain.lstrip()):
+                    break
+                if re.fullmatch(r"- 音频时长：\d{2,}:\d{2}:\d{2}", plain):
+                    lines[index] = f"- 音频时长：{timestamp(row['duration'])}" + line[len(plain):]
+                    break
+            db.execute("UPDATE sessions SET polish_original_content=? WHERE id=?", ("".join(lines), sid))
 
     def edit(self, sid, segment_id, text):
         with self.connect() as db:
@@ -204,6 +271,10 @@ class Store:
                         "UPDATE sessions SET markdown_content=? WHERE id=?",
                         (remove_photo_markdown(markdown_row["markdown_content"], photo), sid),
                     )
+                original = db.execute("SELECT polish_original_content FROM sessions WHERE id=?", (sid,)).fetchone()
+                if original and original["polish_original_content"] is not None:
+                    db.execute("UPDATE sessions SET polish_original_content=? WHERE id=?",
+                               (remove_photo_markdown(original["polish_original_content"], photo), sid))
         if photo:
             (self.root / sid / "photo" / photo).unlink(missing_ok=True)
         return True
@@ -248,6 +319,10 @@ class Store:
                             sid,
                         ),
                     )
+                original = db.execute("SELECT polish_original_content FROM sessions WHERE id=?", (sid,)).fetchone()
+                if original and original["polish_original_content"] is not None and row["photo_filename"]:
+                    db.execute("UPDATE sessions SET polish_original_content=? WHERE id=?",
+                               (replace_photo_markdown(original["polish_original_content"], row["photo_filename"], filename, text), sid))
                 if row["photo_filename"] and row["photo_filename"] != filename:
                     old_path = directory / row["photo_filename"]
             if old_path:
@@ -280,6 +355,7 @@ class Store:
                 if session["markdown_content"] is not None:
                     db.execute("UPDATE sessions SET markdown_content=? WHERE id=?",
                                (append_markdown(session["markdown_content"], "\n\n" + text + "\n\n"), sid))
+                self._append_polish_source(db, sid, "\n\n" + text + "\n\n")
             return True
         except Exception:
             if path:
@@ -331,25 +407,38 @@ class Store:
             current = markdown(session)
             if current != base_content:
                 raise ValueError("文稿已被修改，请保留润色预览并重新生成，避免覆盖新内容。")
+            original = self._polish_source(db, session)
+            original_title = session.get("polish_original_title") or markdown_title(original) or session["title"]
+            now = datetime.now(timezone.utc).isoformat()
             if revision_id is None:
                 if content == current:
                     return True
                 db.execute(
                     "INSERT INTO markdown_polishes(session_id,original_content,result_content,created_at) "
-                    "VALUES(?,?,?,?)", (sid, current, content, datetime.now(timezone.utc).isoformat()),
+                    "VALUES(?,?,?,?)", (sid, original, content, now),
                 )
+                title = markdown_title(content) or session["title"]
             else:
                 revision = db.execute(
                     "SELECT * FROM markdown_polishes WHERE id=? AND session_id=? AND reverted_at IS NULL",
                     (revision_id, sid),
                 ).fetchone()
-                if revision is None or revision["result_content"] != current:
-                    raise ValueError("这次润色已不能直接撤销，当前文稿未改动。")
-                content = revision["original_content"]
-                db.execute("UPDATE markdown_polishes SET reverted_at=? WHERE id=?",
-                           (datetime.now(timezone.utc).isoformat(), revision_id))
-            db.execute("UPDATE sessions SET markdown_content=?,title=COALESCE(?,title) WHERE id=?",
-                       (content, markdown_title(content), sid))
+                if revision is None:
+                    raise ValueError("当前没有可恢复的润色版本。")
+                # Preserve saved edits in the history before explicitly restoring the original.
+                if revision["result_content"] != current:
+                    db.execute(
+                        "INSERT INTO markdown_polishes(session_id,original_content,result_content,created_at,reverted_at) "
+                        "VALUES(?,?,?,?,?)", (sid, original, current, now, now),
+                    )
+                content = original
+                title = original_title
+                db.execute("UPDATE markdown_polishes SET reverted_at=? WHERE session_id=? AND reverted_at IS NULL",
+                           (now, sid))
+            db.execute(
+                "UPDATE sessions SET markdown_content=?,title=?,polish_original_content=?,polish_original_title=? WHERE id=?",
+                (content, title, original, original_title, sid),
+            )
             return True
 
     def delete(self, sid):
