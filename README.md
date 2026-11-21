@@ -18,13 +18,12 @@
 
 ## demo展示
 
-**从视频口播到文字记录**：一边播放课程，一边转写，按需插入截图，保留原始学习材料。
+左侧是**原始转写**，右侧是 **AI 整理后的学习笔记**：从视频口播到 Markdown，在同一处完成记录、编辑与复习。
 
-![Parrot 转写界面：带时间标记的课程文字、逐段编辑与桌面悬浮球](docs/images/demo-transcript.png)
-
-**从文字记录到学习笔记**：借助 AI 清理口播噪声、梳理章节，在 Markdown 中阅读、编辑和复习。
-
-![Parrot 学习笔记预览：AI 生成主题标题、中文顺序章节与结构化 Markdown 正文](docs/images/demo-study-notes.png)
+<p align="center">
+  <a href="docs/images/demo-transcript.png"><img src="docs/images/demo-transcript.png" alt="原始转写：带时间标记的课程文字、逐段编辑与桌面悬浮球" width="49%"></a>
+  <a href="docs/images/demo-study-notes.png"><img src="docs/images/demo-study-notes.png" alt="AI 学习笔记：主题标题、中文顺序章节与结构化 Markdown 正文" width="49%"></a>
+</p>
 
 ## 下载安装
 
