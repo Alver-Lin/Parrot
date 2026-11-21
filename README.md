@@ -1,40 +1,9 @@
-<h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/parrot-brand-dark.svg">
-    <img src="docs/images/parrot-brand-light.svg" alt="Parrot." width="260" height="97">
-  </picture>
-</h1>
+<h1 align="center">Parrot</h1>
 
 <p align="center"><strong>把视频变成 Markdown，让 AI 帮你整理学习笔记。</strong></p>
 
 <p align="center">为习惯通过阅读与书写理解知识的学习者打造。</p>
 
-<p align="center">
-  <a href="https://github.com/Alver-Lin/Parrot/releases/latest">下载安装</a> ·
-  <a href="#demo展示">Demo 展示</a> ·
-  <a href="#首次使用">首次使用</a> ·
-  <a href="docs/usage.md">使用指南</a>
-</p>
-
-## demo展示
-
-左侧是**原始转写**，右侧是 **AI 整理后的学习笔记**：从视频口播到 Markdown，在同一处完成记录、编辑与复习。
-
-<p align="center">
-  <a href="docs/images/demo-transcript.png"><img src="docs/images/demo-transcript.png" alt="原始转写：带时间标记的课程文字、逐段编辑与桌面悬浮球" width="49%"></a>
-  <a href="docs/images/demo-study-notes.png"><img src="docs/images/demo-study-notes.png" alt="AI 学习笔记：主题标题、中文顺序章节与结构化 Markdown 正文" width="49%"></a>
-</p>
-
-## 下载安装
-
-当前发布版本为 **v1.0.0**，适用于 **macOS 13+ / Apple Silicon**。
-
-- **安装包**：[下载 Parrot-1.0.0-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.0/Parrot-1.0.0-arm64.pkg)
-- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.0) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
-
-双击 `.pkg` 按提示安装，再从「应用程序」打开 Parrot。发行包已捆绑 Python，日常使用无需另外安装 Python 或 Node.js。首次使用需要下载语音识别模型，并授权所选音频来源；AI 润色需自行配置兼容接口。
-
-升级安装保留个人记录与模型缓存。若 macOS 提示安装包未经公证，可在「系统设置 → 隐私与安全性」中允许打开。
 
 ## Parrot 是什么？
 
@@ -51,6 +20,26 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 - **屏幕中的图表与演示**：手动框选截图，插入当前记录，并随 Markdown 一起导出。
 
 当前通过实时聆听采集内容，暂不支持直接导入音频或视频文件。原生客户端目前仅支持 macOS，已发布安装包为 Apple Silicon 版本。
+
+## demo展示
+
+左侧是**原始转写**，右侧是 **AI 整理后的学习笔记**：从视频口播到 Markdown，在同一处完成记录、编辑与复习。
+
+<p align="center">
+  <a href="docs/images/demo-transcript.png"><img src="docs/images/demo-transcript.png" alt="原始转写：课程文字、时间标记与手动截图" width="49%"></a>
+  <a href="docs/images/demo-study-notes.png"><img src="docs/images/demo-study-notes.png" alt="AI 学习笔记：结构化 Markdown 正文与对应课程截图" width="49%"></a>
+</p>
+
+## 下载安装
+
+当前发布版本为 **v1.0.0**，适用于 **macOS 13+ / Apple Silicon**。
+
+- **安装包**：[下载 Parrot-1.0.0-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.0/Parrot-1.0.0-arm64.pkg)
+- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.0) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
+
+双击 `.pkg` 按提示安装，再从「应用程序」打开 Parrot。发行包已捆绑 Python，日常使用无需另外安装 Python 或 Node.js。首次使用需要下载语音识别模型，并授权所选音频来源；AI 润色需自行配置兼容接口。
+
+升级安装保留个人记录与模型缓存。若 macOS 提示安装包未经公证，可在「系统设置 → 隐私与安全性」中允许打开。
 
 ## 功能特性
 
