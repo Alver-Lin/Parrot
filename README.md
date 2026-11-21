@@ -1,4 +1,9 @@
-<h1 align="center">Parrot</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/parrot-brand-dark.svg">
+    <img src="docs/images/parrot-brand-light.svg" alt="Parrot." width="260" height="97">
+  </picture>
+</h1>
 
 <p align="center"><strong>把视频变成 Markdown，让 AI 帮你整理学习笔记。</strong></p>
 
