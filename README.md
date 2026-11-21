@@ -9,6 +9,14 @@
 
 <p align="center">为习惯通过阅读与书写理解知识的学习者打造。</p>
 
+## demo展示
+
+左侧是**原始转写**，右侧是 **AI 整理后的学习笔记**：从视频口播到 Markdown，在同一处完成记录、编辑与复习。
+
+<p align="center">
+  <a href="docs/images/demo-transcript.png"><img src="docs/images/demo-transcript.png" alt="原始转写：课程文字、时间标记与手动截图" width="49%"></a>
+  <a href="docs/images/demo-study-notes.png"><img src="docs/images/demo-study-notes.png" alt="AI 学习笔记：结构化 Markdown 正文与对应课程截图" width="49%"></a>
+</p>
 
 ## Parrot 是什么？
 
@@ -26,14 +34,6 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 
 当前通过实时聆听采集内容，暂不支持直接导入音频或视频文件。原生客户端目前仅支持 macOS，已发布安装包为 Apple Silicon 版本。
 
-## demo展示
-
-左侧是**原始转写**，右侧是 **AI 整理后的学习笔记**：从视频口播到 Markdown，在同一处完成记录、编辑与复习。
-
-<p align="center">
-  <a href="docs/images/demo-transcript.png"><img src="docs/images/demo-transcript.png" alt="原始转写：课程文字、时间标记与手动截图" width="49%"></a>
-  <a href="docs/images/demo-study-notes.png"><img src="docs/images/demo-study-notes.png" alt="AI 学习笔记：结构化 Markdown 正文与对应课程截图" width="49%"></a>
-</p>
 
 ## 下载安装
 
