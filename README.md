@@ -7,7 +7,7 @@
 
 <p align="center"><strong>把视频变成 Markdown，让 AI 帮你整理学习笔记。</strong></p>
 
-<p align="center">为读写型学习者打造的视频学习工具，将视频中的语音与截图整理为 Markdown 文档，并借助 AI 提炼重点、梳理知识结构，生成可编辑、可回顾的学习笔记。</p>
+<p align="center">为习惯通过阅读与书写理解知识的学习者打造。</p>
 
 ## 一、demo展示
 
