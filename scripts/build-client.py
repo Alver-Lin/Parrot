@@ -74,7 +74,7 @@ def build(app, identity, python):
         "CFBundleIdentifier": "com.alverlin.parrot",
         "CFBundleExecutable": "Parrot",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.0.3",
+        "CFBundleShortVersionString": "1.0.2",
         "CFBundleVersion": "3",
         "CFBundleIconFile": "Parrot.icns",
         "LSMinimumSystemVersion": "13.0",

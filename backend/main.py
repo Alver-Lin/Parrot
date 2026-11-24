@@ -36,7 +36,7 @@ async def lifespan(app):
     await service.close()
 
 
-app = FastAPI(title="Parrot", version="1.0.3", lifespan=lifespan)
+app = FastAPI(title="Parrot", version="1.0.2", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

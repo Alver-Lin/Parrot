@@ -11,21 +11,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO = "Alver-Lin/Parrot"
-TAG = "v1.0.3"
-PKG = ROOT / "dist/release/Parrot-1.0.3-arm64.pkg"
-SHA = ROOT / "dist/release/Parrot-1.0.3-arm64.pkg.sha256"
+TAG = "v1.0.2"
+PKG = ROOT / "dist/release/Parrot-1.0.2-arm64.pkg"
+SHA = ROOT / "dist/release/Parrot-1.0.2-arm64.pkg.sha256"
 
-BODY = """## Parrot v1.0.3（macOS）
+BODY = """## Parrot v1.0.2（macOS）
 
 Apple Silicon（arm64）安装包。
 
 ### 更新内容
 - 修复从本机构建切换到安装包后学习记录看起来被清空的问题
 - 安装版与开发版继续使用独立数据目录；安装版仅在本地库为空时从旧 `.data` 导入一次
-- 之后重装或升级（含 1.0.1 → 1.0.3）只使用 `~/Library/Application Support/Parrot`，不会再用开发目录覆盖
+- 之后重装或升级（含 1.0.1 → 1.0.2）只使用 `~/Library/Application Support/Parrot`，不会再用开发目录覆盖
 
 ### 安装
-1. 下载下方 `Parrot-1.0.3-arm64.pkg`
+1. 下载下方 `Parrot-1.0.2-arm64.pkg`
 2. 双击安装到「应用程序」
 3. 从启动台打开 Parrot
 
@@ -39,7 +39,7 @@ Apple Silicon（arm64）安装包。
 引导下载页：仓库内 `docs/download.html`
 
 ### 校验
-见附件 `Parrot-1.0.3-arm64.pkg.sha256`
+见附件 `Parrot-1.0.2-arm64.pkg.sha256`
 """
 
 
@@ -85,7 +85,7 @@ def ensure_release(token: str) -> dict:
             data=json.dumps(
                 {
                     "tag_name": TAG,
-                    "name": "Parrot v1.0.3",
+                    "name": "Parrot v1.0.2",
                     "body": BODY,
                     "draft": False,
                     "prerelease": False,

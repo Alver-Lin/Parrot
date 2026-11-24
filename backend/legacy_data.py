@@ -101,7 +101,7 @@ def import_legacy_into(target: Path) -> Path | None:
 
     - the `.legacy-import-done` marker blocks every later launch/upgrade
     - any existing install sessions are never overwritten by `.data`
-    - later pkg upgrades (e.g. 1.0.1 → 1.0.3) keep using Application Support only
+    - later pkg upgrades (e.g. 1.0.1 → 1.0.2) keep using Application Support only
     """
     if os.environ.get("PARROT_DISABLE_LEGACY_IMPORT") == "1":
         return None
