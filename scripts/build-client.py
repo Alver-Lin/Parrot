@@ -74,8 +74,8 @@ def build(app, identity, python):
         "CFBundleIdentifier": "com.alverlin.parrot",
         "CFBundleExecutable": "Parrot",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.0.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": "1.0.1",
+        "CFBundleVersion": "2",
         "CFBundleIconFile": "Parrot.icns",
         "LSMinimumSystemVersion": "13.0",
         "LSUIElement": True,
@@ -91,6 +91,7 @@ def build(app, identity, python):
     }
     with (app / "Contents/Info.plist").open("wb") as output_file:
         plistlib.dump(info, output_file)
+    shutil.copy2(ROOT / "native/AppIcon.png", resources / "AppIcon.png")
     iconset = app.parent / "Parrot.iconset"
     if iconset.exists():
         shutil.rmtree(iconset)

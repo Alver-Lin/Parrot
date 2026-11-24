@@ -11,16 +11,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO = "Alver-Lin/Parrot"
-TAG = "v1.0.0"
-PKG = ROOT / "dist/release/Parrot-1.0.0-arm64.pkg"
-SHA = ROOT / "dist/release/Parrot-1.0.0-arm64.pkg.sha256"
+TAG = "v1.0.1"
+PKG = ROOT / "dist/release/Parrot-1.0.1-arm64.pkg"
+SHA = ROOT / "dist/release/Parrot-1.0.1-arm64.pkg.sha256"
 
-BODY = """## Parrot v1.0.0（macOS）
+BODY = """## Parrot v1.0.1（macOS）
 
 Apple Silicon（arm64）安装包。
 
+### 更新内容
+- 更新应用图标与品牌标识
+- 优化识别设置布局与文稿 Tab 切换
+- Markdown / Preview 顶层切换，导出与润色操作收纳到 Markdown 页
+- 移除冗余关闭按钮与自动跟随开关，默认跟随最新转写
+
 ### 安装
-1. 下载下方 `Parrot-1.0.0-arm64.pkg`
+1. 下载下方 `Parrot-1.0.1-arm64.pkg`
 2. 双击安装到「应用程序」
 3. 从启动台打开 Parrot
 
@@ -34,7 +40,7 @@ Apple Silicon（arm64）安装包。
 引导下载页：仓库内 `docs/download.html`
 
 ### 校验
-见附件 `Parrot-1.0.0-arm64.pkg.sha256`
+见附件 `Parrot-1.0.1-arm64.pkg.sha256`
 """
 
 
@@ -80,7 +86,7 @@ def ensure_release(token: str) -> dict:
             data=json.dumps(
                 {
                     "tag_name": TAG,
-                    "name": "Parrot v1.0.0",
+                    "name": "Parrot v1.0.1",
                     "body": BODY,
                     "draft": False,
                     "prerelease": False,

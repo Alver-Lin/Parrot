@@ -9,6 +9,7 @@ import { usePolishSettings } from "./usePolishSettings";
 
 const props = defineProps<{
   sessionId: string; content: string; active: boolean; unsaved: boolean; revisionId?: number | null;
+  available?: boolean;
   prepare: (id: string) => Promise<{ source: string; baseContent: string; localContent: string }>;
   apply: (id: string, content: string, baseContent: string, localContent: string) => Promise<void>;
   undo: (id: string, revision: number) => Promise<void>;
@@ -16,7 +17,6 @@ const props = defineProps<{
 const emit = defineEmits<{ "open-settings": [] }>();
 const { isDesktop, saved, dirty, busy: settingsBusy, generating, initialize } = usePolishSettings();
 const open = ref(false);
-const tooltipOpen = ref(false);
 const preparing = ref(false);
 const applying = ref(false);
 const undoing = ref(false);
@@ -33,17 +33,13 @@ let jobId: string | undefined;
 let cancelled = false;
 let disposed = false;
 const frozen = computed(() => preparing.value || applying.value || undoing.value);
+const canUse = computed(() => props.available !== false && !!props.sessionId && !!props.content.trim());
 const changed = computed(() => props.sessionId !== sessionId.value || props.content !== localContent.value || props.active);
 const progressLabel = computed(() => progress.value.total
   ? `正在润色 ${progress.value.done}/${progress.value.total} 批` : "正在准备润色请求…");
 
-function onTooltipOpenChange(visible: boolean) {
-  tooltipOpen.value = visible && !open.value && !frozen.value && !running.value;
-}
-
 async function showDialog() {
-  tooltipOpen.value = false;
-  if (props.active || frozen.value || running.value) return;
+  if (!canUse.value || props.active || frozen.value || running.value) return;
   preparing.value = true;
   error.value = "";
   try {
@@ -144,15 +140,22 @@ onUnmounted(() => {
 
 <template>
   <span class="polish-button-group">
-    <a-tooltip v-if="revisionId" title="恢复原始版本">
-      <a-button type="text" size="small" aria-label="恢复原始版本" :loading="undoing"
-        :disabled="active || unsaved || frozen || running" @click="undo"><UndoOutlined /></a-button>
-    </a-tooltip>
-    <a-tooltip :open="tooltipOpen && !open && !frozen && !running" @openChange="onTooltipOpenChange"
-      :title="active ? '请先结束当前记录的转写' : '清理转写噪声、生成标题并整理学习笔记，预览后再应用'">
-      <a-button type="text" size="small" aria-label="AI 润色" :loading="preparing || running"
-        :disabled="active || frozen || running || !content.trim()" @click="showDialog"><EditOutlined /> AI 润色</a-button>
-    </a-tooltip>
+    <a-button
+      type="text"
+      size="small"
+      aria-label="恢复初版"
+      :loading="undoing"
+      :disabled="!revisionId || !canUse || active || unsaved || frozen || running"
+      @click="undo"
+    ><UndoOutlined /> 恢复初版</a-button>
+    <a-button
+      type="text"
+      size="small"
+      aria-label="AI 润色"
+      :loading="preparing || running"
+      :disabled="!canUse || active || frozen || running"
+      @click="showDialog"
+    ><EditOutlined /> AI 润色</a-button>
   </span>
   <a-modal :open="open" title="AI 润色" width="820px" wrap-class-name="client-modal polish-dialog"
     :footer="null" :mask-closable="!running && !applying" :keyboard="!applying" @cancel="closeDialog">

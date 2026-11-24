@@ -14,10 +14,10 @@ import {
   ArrowRightOutlined,
   CheckOutlined,
   CodeOutlined,
-  CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  EyeOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
@@ -42,16 +42,13 @@ import {
   type AudioSource,
 } from "./api";
 
+import parrotAppIcon from "./assets/parrot-app-icon.png";
 import {
-  collapsePanel,
   ensureCapturePermission,
   openCaptureSettings,
-  copyText,
   inDesktop,
   saveMarkdown,
   takeScreenshot,
-  loadAutoScroll,
-  saveAutoScroll,
   loadAudioSource,
   saveAudioSource,
   readCapturePermissions,
@@ -63,7 +60,6 @@ const settingsOpen = ref(false);
 const historyOpen = ref(false);
 const exporting = ref(false);
 const screenshotPending = ref(false);
-const markdownView = ref<"source" | "preview">("source");
 const isDesktop = inDesktop();
 const headerTooltipProps = {
   placement: "bottom" as const,
@@ -100,8 +96,6 @@ const authorizationPending = ref(false);
 const modelRequestPending = ref(false);
 let permissionRefresh: Promise<void> | undefined;
 const transcript = ref<HTMLElement>();
-const autoScroll = ref(true);
-const autoScrollLoading = ref(true);
 const editingId = ref<number | null>(null);
 const editText = ref("");
 const savePending = ref(false);
@@ -124,10 +118,12 @@ const reviewCount = computed(
   () => segments.value.filter((segment) => segment.review).length,
 );
 const characterCount = computed(() =>
-  tab.value === "markdown" ? markdown.value.replace(/\s/g, "").length : segments.value.reduce(
-    (sum, segment) => sum + (segment.kind === "image" ? 0 : segment.text.replace(/\s/g, "").length),
-    0,
-  ),
+  tab.value === "transcript"
+    ? segments.value.reduce(
+        (sum, segment) => sum + (segment.kind === "image" ? 0 : segment.text.replace(/\s/g, "").length),
+        0,
+      )
+    : markdown.value.replace(/\s/g, "").length,
 );
 const markdownDrafts = reactive<Record<string, {
   text: string;
@@ -302,11 +298,7 @@ async function refresh() {
         if (draft && !draft.saving && draft.text === draft.saved) {
           draft.text = draft.saved = toMarkdown(detail);
         }
-        if (
-          autoScroll.value &&
-          before !== detail.segments?.length &&
-          editingId.value === null
-        ) {
+        if (before !== detail.segments?.length && editingId.value === null) {
           await nextTick();
           scrollToLatest();
         }
@@ -471,7 +463,7 @@ async function start() {
       tab.value = "transcript";
       editingId.value = null;
       await nextTick();
-      if (autoScroll.value) scrollToLatest();
+      scrollToLatest();
     }
   } catch (error) {
     showError(error);
@@ -574,15 +566,6 @@ function scrollToLatest() {
     top: transcript.value.scrollHeight,
     behavior: "smooth",
   });
-}
-
-async function copyMarkdown() {
-  try {
-    await copyText(markdown.value);
-    message.success("Markdown 已复制");
-  } catch {
-    message.error("复制失败，请使用导出 Markdown");
-  }
 }
 
 async function exportMarkdown() {
@@ -710,20 +693,6 @@ function removeScreenshot(segment: Segment) {
   });
 }
 
-async function changeAutoScroll(value: boolean | string | number) {
-  const previous = autoScroll.value;
-  autoScroll.value = Boolean(value);
-  autoScrollLoading.value = true;
-  try {
-    await saveAutoScroll(autoScroll.value);
-  } catch (error) {
-    autoScroll.value = previous;
-    showError(error);
-  } finally {
-    autoScrollLoading.value = false;
-  }
-}
-
 async function changeAudioSource(source: AudioSource) {
   const previous = settings.audio_source;
   settings.audio_source = source;
@@ -749,13 +718,6 @@ onMounted(async () => {
     showError(error);
   } finally {
     audioSourceLoading.value = false;
-  }
-  try {
-    autoScroll.value = await loadAutoScroll();
-  } catch (error) {
-    showError(error);
-  } finally {
-    autoScrollLoading.value = false;
   }
 });
 onUnmounted(() => {
@@ -787,12 +749,7 @@ onUnmounted(() => {
       <header class="panel-header">
         <div class="panel-brand">
           <span class="brand-mark">
-            <svg class="parrot-logo" viewBox="0 0 32 32" role="img" aria-label="Parrot 鹦鹉图标">
-              <path fill="#fff" d="M11.6 23.6C8.5 22.1 6.8 19.2 6.8 15.8c0-3.1 1.5-5.4 2.6-7C9.8 5.5 12.4 3.5 16 3.5c3.9 0 6.6 2.5 6.6 6.2v6.1c0 4.3-2.2 7-5.8 8.2l.7 5-3.6-2.7-3.6 2.7z" />
-              <path fill="#ffc85b" d="M22 9.3c4.1 0 6 1.9 6 4.7 0 2.3-1.6 4-3.9 4.4.9-1.9 1-3.5-.6-4.4l-2.1-.8z" />
-              <path d="M10 14.3c-1.3 3.6 1.3 7.3 5.9 7.7 2.6-1.3 3.8-3.3 3.5-5.7M11.4 16.2c.8 1.6 2.1 2.6 3.9 3" fill="none" stroke="#4263eb" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" />
-              <circle cx="18.6" cy="8.7" r="1.15" fill="#263564" />
-            </svg>
+            <img class="parrot-logo" :src="parrotAppIcon" alt="" width="32" height="32" />
           </span
           ><strong>Parrot<span>.</span></strong>
         </div>
@@ -814,13 +771,6 @@ onUnmounted(() => {
               aria-label="识别设置"
               @click="settingsOpen = true"
               ><template #icon><SettingOutlined /></template></a-button
-          ></a-tooltip>
-          <a-tooltip v-bind="headerTooltipProps" v-if="isDesktop" title="收起到悬浮球，转写继续"
-            ><a-button
-              type="text"
-              aria-label="收起转写面板"
-              @click="collapsePanel"
-              ><template #icon><CloseOutlined /></template></a-button
           ></a-tooltip>
         </div>
       </header>
@@ -866,25 +816,69 @@ onUnmounted(() => {
 
       <section class="document-panel">
         <div class="document-header">
-          <a-tabs v-model:activeKey="tab"
-            ><a-tab-pane key="transcript"
-              ><template #tab
-                ><FileTextOutlined /> 转写内容
-                <span v-if="segments.length" class="tab-count">{{
-                  segments.length
-                }}</span></template
-              ></a-tab-pane
-            ><a-tab-pane key="markdown"
-              ><template #tab><CodeOutlined /> Markdown</template></a-tab-pane
-            ></a-tabs
-          ><a-button
-            type="text"
-            size="small"
-            :disabled="!segments.length"
-            :loading="exporting"
-            @click="exportMarkdown"
-            ><DownloadOutlined /> 导出</a-button
-          >
+          <div class="document-tabs" role="tablist" aria-label="文稿视图">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="tab === 'transcript'"
+              :class="{ active: tab === 'transcript' }"
+              @click="tab = 'transcript'"
+            >
+              <FileTextOutlined />
+              <span>转写内容</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="tab === 'markdown'"
+              :class="{ active: tab === 'markdown' }"
+              @click="tab = 'markdown'"
+            >
+              <CodeOutlined />
+              <span>Markdown</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="tab === 'preview'"
+              :class="{ active: tab === 'preview' }"
+              @click="tab = 'preview'; saveMarkdownDraft()"
+            >
+              <EyeOutlined />
+              <span>Preview</span>
+            </button>
+          </div>
+          <div v-if="tab === 'markdown'" class="markdown-actions">
+            <a-button
+              v-if="markdownSaveVisible"
+              type="text"
+              size="small"
+              :loading="markdownDraft?.saving"
+              :disabled="!!markdownDraft?.saving"
+              aria-label="保存 Markdown"
+              @click="saveMarkdownDraft()"
+            >{{ markdownSaveLabel }}</a-button>
+            <PolishAction
+              :session-id="selected?.id ?? ''"
+              :content="markdown"
+              :active="currentActive"
+              :unsaved="!!markdownSaveVisible"
+              :revision-id="selected?.polish_revision"
+              :available="!!selected && !!markdown.trim()"
+              :prepare="preparePolishDocument"
+              :apply="applyPolishResult"
+              :undo="undoPolishResult"
+              @open-settings="openSettings"
+            />
+            <a-button
+              type="text"
+              size="small"
+              aria-label="导出 Markdown"
+              :disabled="!selected || !segments.length || !markdown.trim() || exporting"
+              :loading="exporting"
+              @click="exportMarkdown"
+            ><DownloadOutlined /> 导出</a-button>
+          </div>
         </div>
 
         <div v-if="!segments.length" class="empty-document">
@@ -995,48 +989,9 @@ onUnmounted(() => {
           </article>
         </div>
 
-        <div v-else class="markdown-area">
-          <div class="markdown-toolbar">
-            <div class="markdown-view-switch" role="tablist" aria-label="Markdown 视图">
-              <button
-                type="button"
-                role="tab"
-                :aria-selected="markdownView === 'source'"
-                :class="{ active: markdownView === 'source' }"
-                @click="markdownView = 'source'"
-              >
-                Markdown
-              </button>
-              <button
-                type="button"
-                role="tab"
-                :aria-selected="markdownView === 'preview'"
-                :class="{ active: markdownView === 'preview' }"
-                @click="markdownView = 'preview'; saveMarkdownDraft()"
-              >
-                Preview
-              </button>
-            </div>
-            <div class="markdown-actions">
-              <a-button
-                v-if="markdownView === 'source' && markdownSaveVisible"
-                type="text"
-                size="small"
-                :loading="markdownDraft?.saving"
-                :disabled="!!markdownDraft?.saving"
-                aria-label="保存 Markdown"
-                @click="saveMarkdownDraft()"
-              >{{ markdownSaveLabel }}</a-button>
-              <PolishAction v-if="selected" :session-id="selected.id" :content="markdown" :active="currentActive"
-                :unsaved="!!markdownSaveVisible" :revision-id="selected.polish_revision" :prepare="preparePolishDocument"
-                :apply="applyPolishResult" :undo="undoPolishResult" @open-settings="openSettings" />
-              <a-button type="text" size="small" aria-label="复制全文" @click="copyMarkdown"
-              ><CopyOutlined /> 复制全文</a-button
-              >
-            </div>
-          </div>
+        <div v-else-if="tab === 'markdown' || tab === 'preview'" class="markdown-area">
           <textarea
-            v-if="markdownView === 'source'"
+            v-if="tab === 'markdown'"
             v-model="markdown"
             class="markdown-editor"
             aria-label="编辑 Markdown"
@@ -1157,7 +1112,7 @@ onUnmounted(() => {
               aria-hidden="true"
             >
               <i
-                v-for="(height, index) in [12, 22, 28]"
+                v-for="(height, index) in [12, 22, 12]"
                 :key="index"
                 :style="{ height: `${height}px` }"
               ></i>
@@ -1235,107 +1190,138 @@ onUnmounted(() => {
         v-model:open="settingsOpen"
         title="识别设置"
         :footer="null"
-        width="480px"
+        width="500px"
         wrap-class-name="client-modal settings-modal"
       >
-        <a-form layout="vertical" :disabled="busy || modelLoading">
-          <a-form-item label="音频来源">
-            <a-select
-              id="audio-source-select"
-              aria-label="音频来源"
-              :value="settings.audio_source"
-              :options="audioSourceOptions"
-              :disabled="busy || modelLoading || audioSourceLoading"
-              @change="changeAudioSource"
+        <div class="settings-stack">
+          <section class="settings-section" aria-label="识别参数">
+            <header class="settings-section-header">
+              <h3>识别参数</h3>
+              <span>音频采集与本地 Whisper</span>
+            </header>
+            <a-form layout="vertical" :disabled="busy || modelLoading">
+              <a-form-item label="音频来源">
+                <a-select
+                  id="audio-source-select"
+                  aria-label="音频来源"
+                  :value="settings.audio_source"
+                  :options="audioSourceOptions"
+                  :disabled="busy || modelLoading || audioSourceLoading"
+                  @change="changeAudioSource"
+                />
+              </a-form-item>
+              <div class="settings-pair">
+                <a-form-item label="音频语言">
+                  <a-select v-model:value="settings.language" :options="languageOptions" />
+                </a-form-item>
+                <a-form-item label="识别模型">
+                  <a-select v-model:value="settings.model" :options="modelOptions" />
+                </a-form-item>
+              </div>
+              <a-form-item label="推理引擎" class="settings-form-item-last">
+                <a-select
+                  v-model:value="settings.engine"
+                  :options="[
+                    { value: 'auto', label: '自动选择（推荐）' },
+                    { value: 'mlx', label: 'MLX · Apple 芯片' },
+                    { value: 'faster-whisper', label: 'faster-whisper · CPU' },
+                  ]"
+                />
+              </a-form-item>
+            </a-form>
+          </section>
+
+          <PolishSettings />
+
+          <section class="settings-section settings-status" aria-label="程序状态">
+            <header class="settings-section-header">
+              <h3>运行状态</h3>
+              <span>权限、模型与润色可用性</span>
+            </header>
+            <div class="recognition-status">
+              <div
+                class="readiness-row permission-status"
+                :class="{
+                  'is-ready': authorizationReady,
+                  'is-error': permissionCheckFailed || (capturePermissions && !authorizationReady),
+                }"
+                role="status"
+              >
+                <div class="readiness-copy">
+                  <strong>
+                    <span v-if="authorizationReady" class="status-dot" aria-hidden="true"></span>
+                    <CloseOutlined v-else-if="permissionCheckFailed || capturePermissions" class="status-cross" />
+                    <LoadingOutlined v-else-if="isDesktop" class="status-pending" />
+                    <InfoCircleOutlined v-else class="status-pending" />
+                    {{ authorizationLabel }}
+                  </strong>
+                  <p v-if="!authorizationReady">{{ authorizationDescription }}</p>
+                </div>
+                <a-button
+                  v-if="capturePermissions && !authorizationReady"
+                  type="link"
+                  class="readiness-action"
+                  :loading="authorizationPending"
+                  :disabled="authorizationPending || audioSourceLoading"
+                  @click="authorizeFromSettings"
+                >前往授权</a-button>
+                <a-button
+                  v-else-if="permissionCheckFailed"
+                  type="link"
+                  class="readiness-action"
+                  @click="refreshCapturePermissions"
+                >重试</a-button>
+              </div>
+              <div
+                v-if="status?.model_cache"
+                class="readiness-row model-preparation"
+                :class="{
+                  'is-ready': selectedModelDownloaded,
+                  'is-error': !selectedModelDownloaded && !modelLoading,
+                }"
+                role="status"
+              >
+                <div class="readiness-copy">
+                  <strong>
+                    <span v-if="selectedModelDownloaded" class="status-dot" aria-hidden="true"></span>
+                    <LoadingOutlined v-else-if="modelLoading || modelRequestPending" class="status-pending" />
+                    <CloseOutlined v-else class="status-cross" />
+                    {{ modelLabel }}
+                  </strong>
+                  <p v-if="!selectedModelDownloaded">
+                    {{ modelLoading ? '正在下载所选模型，请保持网络连接。' : '点击下载所选模型，完成后会保存在本地。' }}
+                  </p>
+                </div>
+                <a-button
+                  v-if="!selectedModelDownloaded"
+                  type="link"
+                  class="readiness-action"
+                  :disabled="!connected || busy || modelLoading || modelRequestPending"
+                  :loading="modelLoading || modelRequestPending"
+                  @click="prepareModel"
+                >{{ modelLoading ? '下载中' : '下载模型' }}</a-button>
+              </div>
+              <div v-else class="readiness-row" role="status">
+                <div class="readiness-copy">
+                  <strong><LoadingOutlined class="status-pending" /> 正在检查识别模型状态</strong>
+                </div>
+              </div>
+              <PolishSettings status-only />
+            </div>
+            <a-alert
+              v-if="selectedModelMatches && status?.model.status === 'error'"
+              class="model-error"
+              type="error"
+              show-icon
+              :message="status.model.message"
             />
-          </a-form-item>
-          <div class="settings-pair">
-            <a-form-item label="音频语言"
-              ><a-select
-                v-model:value="settings.language"
-                :options="languageOptions" /></a-form-item
-            ><a-form-item label="识别模型"
-              ><a-select v-model:value="settings.model" :options="modelOptions"
-            /></a-form-item>
-          </div>
-          <a-form-item label="推理引擎"
-            ><a-select
-              v-model:value="settings.engine"
-              :options="[
-                { value: 'auto', label: '自动选择（推荐）' },
-                { value: 'mlx', label: 'MLX · Apple 芯片' },
-                { value: 'faster-whisper', label: 'faster-whisper · CPU' },
-              ]" /></a-form-item
-        ></a-form>
-        <div class="setting-toggle">
-          <div>
-            <label for="auto-scroll-switch">跟随最新内容</label>
-            <p class="field-help">转写时自动滚动到最新文字，关闭后可停留阅读。</p>
-          </div>
-          <a-switch id="auto-scroll-switch" aria-label="跟随最新内容"
-            :checked="autoScroll" :loading="autoScrollLoading" :disabled="autoScrollLoading"
-            @change="changeAutoScroll" />
+          </section>
         </div>
-        <PolishSettings />
-        <div class="recognition-status" aria-label="程序状态">
-          <div class="readiness-row permission-status"
-            :class="{ 'is-ready': authorizationReady, 'is-error': permissionCheckFailed || (capturePermissions && !authorizationReady) }"
-            role="status">
-            <div class="readiness-copy">
-              <strong>
-                <span v-if="authorizationReady" class="status-dot" aria-hidden="true"></span>
-                <CloseOutlined v-else-if="permissionCheckFailed || capturePermissions" class="status-cross" />
-                <LoadingOutlined v-else-if="isDesktop" class="status-pending" />
-                <InfoCircleOutlined v-else class="status-pending" />
-                {{ authorizationLabel }}
-              </strong>
-              <p v-if="!authorizationReady">{{ authorizationDescription }}</p>
-            </div>
-            <a-button v-if="capturePermissions && !authorizationReady"
-              type="link" class="readiness-action" :loading="authorizationPending"
-              :disabled="authorizationPending || audioSourceLoading"
-              @click="authorizeFromSettings">前往授权</a-button>
-            <a-button v-else-if="permissionCheckFailed" type="link" class="readiness-action"
-              @click="refreshCapturePermissions">重试</a-button>
-          </div>
-          <div v-if="status?.model_cache" class="readiness-row model-preparation"
-            :class="{ 'is-ready': selectedModelDownloaded, 'is-error': !selectedModelDownloaded && !modelLoading }"
-            role="status">
-            <div class="readiness-copy">
-              <strong>
-                <span v-if="selectedModelDownloaded" class="status-dot" aria-hidden="true"></span>
-                <LoadingOutlined v-else-if="modelLoading || modelRequestPending" class="status-pending" />
-                <CloseOutlined v-else class="status-cross" />
-                {{ modelLabel }}
-              </strong>
-              <p v-if="!selectedModelDownloaded">{{ modelLoading ? '正在下载所选模型，请保持网络连接。' : '点击下载所选模型，完成后会保存在本地。' }}</p>
-            </div>
-            <a-button
-              v-if="!selectedModelDownloaded"
-              type="link" class="readiness-action"
-              :disabled="!connected || busy || modelLoading || modelRequestPending"
-              :loading="modelLoading || modelRequestPending"
-              @click="prepareModel"
-              >{{ modelLoading ? '下载中' : '下载模型' }}</a-button>
-          </div>
-          <div v-else class="readiness-row" role="status">
-            <div class="readiness-copy">
-              <strong><LoadingOutlined class="status-pending" /> 正在检查识别模型状态</strong>
-            </div>
-          </div>
-          <PolishSettings status-only />
-        </div>
-        <a-alert
-          v-if="selectedModelMatches && status?.model.status === 'error'"
-          class="model-error"
-          type="error"
-          show-icon
-          :message="status.model.message"
-      /></a-modal>
+      </a-modal>
 
       <a-modal
         v-model:open="helpOpen"
-        title="从悬浮球开始学习"
+        title="使用指南"
         :footer="null"
         width="480px"
         wrap-class-name="client-modal"
@@ -1352,13 +1338,12 @@ onUnmounted(() => {
           </p>
           <h3>3. 收起面板，保持专注</h3>
           <p>
-            点击悬浮球或面板右上角的收起按钮，转写会继续。再次点击即可查看。历史记录和设置位于面板顶部，退出程序请使用菜单栏的
+            点击悬浮球即可收起面板，转写会继续；再次点击即可查看。历史记录和设置位于面板顶部，退出程序请使用菜单栏的
             Parrot 菜单。
           </p>
           <h3>4. 校对并导出 Markdown</h3>
           <p>
-            停止后等待剩余转写完成，逐段校对或复制、导出
-            Markdown。只保存文字，不保留完整录音。
+            停止后等待剩余转写完成，逐段校对，再在 Markdown 页导出。只保存文字，不保留完整录音。
           </p>
           <a-alert
             type="info"

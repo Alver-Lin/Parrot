@@ -69,16 +69,32 @@ func waveform(in rect: NSRect, color: NSColor, heights: [CGFloat]? = nil) {
     }
 }
 
+func appIconSource() -> NSImage? {
+    if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+       let image = NSImage(contentsOf: url) {
+        return image
+    }
+    let nearby = URL(fileURLWithPath: #file)
+        .deletingLastPathComponent()
+        .appendingPathComponent("AppIcon.png")
+    return NSImage(contentsOf: nearby)
+}
+
 func appImage(size: Int) -> NSImage {
     let dimension = CGFloat(size)
     let image = NSImage(size: NSSize(width: dimension, height: dimension))
     image.lockFocus()
-    accent.setFill()
-    NSBezierPath(roundedRect: NSRect(x: dimension * 0.07, y: dimension * 0.07,
-        width: dimension * 0.86, height: dimension * 0.86),
-        xRadius: dimension * 0.21, yRadius: dimension * 0.21).fill()
-    waveform(in: NSRect(x: dimension * 0.24, y: dimension * 0.25,
-        width: dimension * 0.52, height: dimension * 0.5), color: .white)
+    let rect = NSRect(x: 0, y: 0, width: dimension, height: dimension)
+    if let source = appIconSource() {
+        source.draw(in: rect, from: .zero, operation: .copy, fraction: 1)
+    } else {
+        accent.setFill()
+        NSBezierPath(roundedRect: NSRect(x: dimension * 0.07, y: dimension * 0.07,
+            width: dimension * 0.86, height: dimension * 0.86),
+            xRadius: dimension * 0.21, yRadius: dimension * 0.21).fill()
+        waveform(in: NSRect(x: dimension * 0.24, y: dimension * 0.25,
+            width: dimension * 0.52, height: dimension * 0.5), color: .white)
+    }
     image.unlockFocus()
     return image
 }
@@ -1739,17 +1755,12 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
                let png = bitmap.representation(using: .png, properties: [:]) {
                 try png.write(to: selfTestDirectory.appendingPathComponent("desktop-settings-ai.png"))
             }
-            let autoScrollWorks = try await webView.callAsyncJavaScript("""
-              const toggle = document.querySelector('#auto-scroll-switch');
-              if (!toggle || toggle.getAttribute('aria-checked') !== 'true') return false;
-              if (document.querySelector('.panel-footer input[type=checkbox]')) return false;
-              toggle.click();
-              await new Promise(resolve => setTimeout(resolve, 200));
-              const preference = await window.parrotNative.request('autoScroll');
-              return preference.enabled === false && toggle.getAttribute('aria-checked') === 'false';
+            let autoScrollGone = try await webView.callAsyncJavaScript("""
+              return !document.querySelector('#auto-scroll-switch')
+                && !document.querySelector('.panel-footer input[type=checkbox]');
             """, arguments: [:], in: nil, contentWorld: .page) as? Bool
-            guard autoScrollWorks == true else { throw appError("识别设置中的自动跟随开关未正确保存") }
-            _ = try await webView.evaluateJavaScript("document.querySelector('#auto-scroll-switch')?.closest('.ant-modal-content')?.querySelector('.ant-modal-close')?.click()")
+            guard autoScrollGone == true else { throw appError("识别设置不应再显示自动跟随开关") }
+            _ = try await webView.evaluateJavaScript("document.querySelector('.settings-modal .ant-modal-close')?.click()")
             try await Task.sleep(nanoseconds: 300_000_000)
             let sourceRequestWorks = try await webView.callAsyncJavaScript("""
               document.querySelector('[aria-label="新建学习记录"]').click();

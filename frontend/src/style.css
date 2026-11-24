@@ -57,20 +57,20 @@ button:focus-visible {
   color: #4263eb;
 }
 .brand-mark {
-  background: #4263eb;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  width: 30px;
+  width: 32px;
   height: 32px;
   border-radius: 9px;
-  box-shadow: 0 3px 8px #4263eb20;
+  overflow: hidden;
+  box-shadow: 0 3px 8px #7aa2ff33;
 }
 .parrot-logo {
   display: block;
-  width: 27px;
-  height: 27px;
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
 }
 .header-actions {
   display: flex;
@@ -98,12 +98,16 @@ button:focus-visible {
   background: #e6edff;
 }
 .header-action-tooltip.ant-tooltip .ant-tooltip-inner {
-  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 5px 10px;
   border: 1px solid #e6ebf5;
   border-radius: 8px;
   color: #52617f;
   font-size: 11px;
-  line-height: 1.6;
+  line-height: 1.2;
   background: #fff;
   box-shadow: 0 5px 16px #263b6514;
 }
@@ -300,54 +304,84 @@ button:focus-visible {
   min-height: 0;
 }
 .document-header {
-  height: 57px;
+  height: 56px;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 0 24px;
   flex-shrink: 0;
 }
-.document-header .ant-tabs {
-  height: 100%;
+.document-header .markdown-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: wrap;
   min-width: 0;
 }
-.document-header .ant-tabs-nav {
-  margin: 0;
-  height: 100%;
+.document-header .markdown-actions .ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 10px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  color: #8293b3;
 }
-.document-header .ant-tabs-nav:before {
-  border: 0;
-}
-.document-header .ant-tabs .ant-tabs-tab {
+.document-header .markdown-actions .ant-btn .anticon {
   font-size: 12px;
-  padding: 17px 0;
-  margin: 0;
 }
-.document-header .ant-tabs .ant-tabs-tab + .ant-tabs-tab {
-  margin-left: 25px;
+.document-tabs {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  align-self: flex-start;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #e7ecf5;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f8fafd 0%, #f3f6fb 100%);
+  box-shadow: inset 0 1px 0 #ffffffcc;
 }
-.document-header .ant-tabs .ant-tabs-tab .ant-tabs-tab-btn:focus-visible {
-  outline: none;
-}
-.document-header .ant-tabs-content-holder,
-.document-header .ant-tabs .ant-tabs-nav .ant-tabs-nav-operations,
-.document-header .ant-tabs .ant-tabs-nav .ant-tabs-nav-more {
-  display: none;
-}
-.document-header > .ant-btn {
+.document-tabs button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #8a98b0;
   font-size: 11px;
-  color: #8292af;
-  flex-shrink: 0;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
-.tab-count {
-  font-size: 9px;
-  display: inline-block;
-  background: #eff2ff;
-  color: #6b82db;
-  padding: 0 5px;
-  border-radius: 4px;
-  margin-left: 3px;
+.document-tabs button .anticon {
+  font-size: 12px;
+}
+.document-tabs button:hover {
+  color: #5d6f8d;
+}
+.document-tabs button.active {
+  background: #fff;
+  color: #4263eb;
+  box-shadow: 0 1px 2px #263b6510, 0 4px 10px #4263eb12;
+}
+.document-tabs button:focus-visible {
+  outline: 2px solid #4263eb55;
+  outline-offset: 1px;
 }
 .empty-document {
   display: flex;
@@ -520,45 +554,6 @@ button:focus-visible {
   scrollbar-width: thin;
   scrollbar-color: #e0e6f1 transparent;
 }
-.markdown-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-.markdown-view-switch {
-  display: inline-grid;
-  grid-template-columns: repeat(2, 1fr);
-  flex-shrink: 0;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid #e6ebf5;
-  border-radius: 999px;
-  background: #f7f9fd;
-}
-.markdown-view-switch button {
-  border: 0;
-  border-radius: 999px;
-  padding: 4px 10px;
-  background: transparent;
-  color: #8b9bb5;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.2px;
-  line-height: 1.2;
-  cursor: pointer;
-}
-.markdown-view-switch button.active {
-  background: #fff;
-  color: #4263eb;
-  box-shadow: 0 1px 3px #263b6512;
-}
-.markdown-view-switch button:focus-visible {
-  outline: 2px solid #4263eb55;
-  outline-offset: 1px;
-}
 .markdown-editor {
   flex: 1;
   width: 100%;
@@ -659,22 +654,6 @@ button:focus-visible {
 .markdown-preview .transcript-photo {
   margin: 12px 0;
 }
-.markdown-toolbar {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  font-size: 8px;
-  letter-spacing: 1px;
-  color: #a3aec0;
-}
-.markdown-toolbar .ant-btn {
-  font-size: 10px;
-  letter-spacing: 0;
-  color: #8293b3;
-}
 .footer-info,
 .footer-actions {
   display: flex;
@@ -745,77 +724,111 @@ button:focus-visible {
   font-size: 14px;
 }
 .client-modal .ant-form-item {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 .client-modal .ant-form-item-label {
-  padding-bottom: 6px;
+  padding-bottom: 5px;
 }
 .client-modal .ant-form-item-label > label {
   font-size: 11px;
   color: #74849d;
 }
 .client-modal .ant-input,
+.client-modal .ant-input-affix-wrapper,
 .client-modal .ant-select {
   font-size: 11px;
 }
+.client-modal .ant-select-selector,
+.client-modal .ant-input,
+.client-modal .ant-input-affix-wrapper {
+  min-height: 32px !important;
+  border-radius: 8px !important;
+  border-color: #e6ebf5 !important;
+  box-shadow: none !important;
+}
+.client-modal .ant-select-focused .ant-select-selector,
+.client-modal .ant-input:focus,
+.client-modal .ant-input-affix-wrapper-focused {
+  border-color: #4263eb !important;
+  box-shadow: 0 0 0 2px #4263eb14 !important;
+}
 .client-modal .ant-select-selector {
   font-size: 11px !important;
+  align-items: center;
 }
 .client-modal textarea.ant-input {
   line-height: 1.9;
 }
-.settings-pair {
+.settings-stack {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 14px;
 }
-.field-help {
-  font-size: 9px;
-  color: #a3adc0;
-  line-height: 1.8;
-  margin: 6px 0 0;
+.settings-section {
+  padding: 14px 14px 12px;
+  border: 1px solid #eef1f7;
+  border-radius: 12px;
+  background: #fbfcfe;
 }
-.recognition-status {
-  display: grid;
-  gap: 16px;
-  border-top: 1px solid #eef1f7;
-  padding-top: 15px;
-}
-.polish-configuration {
-  border-top: 1px solid #eef1f7;
-  padding: 15px 0 16px;
-  scroll-margin-top: 12px;
-}
-.polish-configuration h3 {
+.settings-section-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 0 12px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #27344c;
+  margin-bottom: 12px;
 }
-.polish-configuration h3 span {
+.settings-section-header h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #27344c;
+  letter-spacing: -0.2px;
+}
+.settings-section-header span {
   font-size: 9px;
   font-weight: 400;
   color: #a3adc0;
+}
+.settings-form-item-last {
+  margin-bottom: 0 !important;
+}
+.settings-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.field-help {
+  font-size: 9px;
+  color: #a3adc0;
+  line-height: 1.55;
+  margin: 4px 0 0;
+}
+.recognition-status {
+  display: grid;
+  gap: 10px;
+}
+.settings-status .recognition-status {
+  padding: 0;
+  border: 0;
+}
+.polish-configuration {
+  scroll-margin-top: 12px;
 }
 .polish-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  margin-top: 2px;
 }
 .polish-actions .ant-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 26px;
-  padding: 0 8px;
+  min-width: 72px;
+  height: 28px;
+  padding: 0 10px;
   gap: 4px;
-  border-radius: 6px;
+  border-radius: 7px;
   font-size: 10px;
   line-height: 1;
   box-shadow: none;
@@ -854,6 +867,7 @@ button:focus-visible {
 .polish-button-group {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
 }
 .polish-progress {
   margin: 8px 0 14px;
@@ -902,23 +916,14 @@ button:focus-visible {
 }
 .readiness-row {
   display: flex;
-  gap: 15px;
+  gap: 12px;
   justify-content: space-between;
   align-items: center;
-}
-.setting-toggle {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  padding: 0 0 16px;
-}
-.setting-toggle label {
-  font-size: 11px;
-  color: #74849d;
-}
-.setting-toggle .ant-switch {
-  flex-shrink: 0;
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #eef1f7;
 }
 .readiness-copy {
   min-width: 0;
@@ -1102,11 +1107,9 @@ button:focus-visible {
   .document-header {
     padding: 0 18px;
   }
-  .document-header .ant-tabs .ant-tabs-tab + .ant-tabs-tab {
-    margin-left: 19px;
-  }
-  .document-header .ant-tabs .ant-tabs-tab {
-    font-size: 11px;
+  .document-tabs button {
+    padding: 0 10px;
+    font-size: 10px;
   }
   .transcript-scroll,
   .markdown-area {

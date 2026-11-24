@@ -14,8 +14,8 @@ from pathlib import Path
 from client_signing import resolve_identity
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = os.environ.get("PARROT_VERSION", "1.0.0").strip() or "1.0.0"
-BUNDLE_VERSION = os.environ.get("PARROT_BUNDLE_VERSION", "1").strip() or "1"
+VERSION = os.environ.get("PARROT_VERSION", "1.0.1").strip() or "1.0.1"
+BUNDLE_VERSION = os.environ.get("PARROT_BUNDLE_VERSION", "2").strip() or "2"
 IDENTIFIER = "com.alverlin.parrot"
 PKG_ID = "com.alverlin.parrot.pkg"
 
@@ -170,6 +170,7 @@ def build_app(app: Path, identity, host_python: Path):
     create_bundled_python(resources / "python", host_python)
     write_info_plist(app)
 
+    shutil.copy2(ROOT / "native/AppIcon.png", resources / "AppIcon.png")
     iconset = app.parent / "Parrot.iconset"
     if iconset.exists():
         shutil.rmtree(iconset)
