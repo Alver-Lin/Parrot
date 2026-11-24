@@ -14,8 +14,8 @@
 左侧是**原始转写**，右侧是 **AI 整理后的学习笔记**：从视频口播到 Markdown，在同一处完成记录、编辑与复习。
 
 <p align="center">
-  <a href="docs/images/demo-transcript.png"><img src="docs/images/demo-transcript.png" alt="原始转写：课程文字、时间标记与手动截图" width="49%"></a>
-  <a href="docs/images/demo-study-notes.png"><img src="docs/images/demo-study-notes.png" alt="AI 学习笔记：结构化 Markdown 正文与对应课程截图" width="49%"></a>
+  <a href="docs/images/demo-transcript.png"><img src="docs/images/demo-transcript.png" alt="转写内容：时间线文字、校对与手动截图" width="49%"></a>
+  <a href="docs/images/demo-study-notes.png"><img src="docs/images/demo-study-notes.png" alt="Preview：AI 整理后的结构化学习笔记与架构图" width="49%"></a>
 </p>
 
 ## 二、Parrot 是什么？
