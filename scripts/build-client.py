@@ -74,8 +74,8 @@ def build(app, identity, python):
         "CFBundleIdentifier": "com.alverlin.parrot",
         "CFBundleExecutable": "Parrot",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.0.1",
-        "CFBundleVersion": "2",
+        "CFBundleShortVersionString": "1.0.3",
+        "CFBundleVersion": "3",
         "CFBundleIconFile": "Parrot.icns",
         "LSMinimumSystemVersion": "13.0",
         "LSUIElement": True,
@@ -131,7 +131,7 @@ def main():
             raise
     print(f"客户端已构建：{destination}")
     print("签名身份：" + identity.identity)
-    print("当前为本机客户端，使用此项目的 Python 环境与 .data 数据目录。")
+    print("当前为本机客户端，使用此项目的 Python 环境与 .data 数据目录（与安装版隔离）。")
 
 
 if __name__ == "__main__":

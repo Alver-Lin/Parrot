@@ -55,7 +55,7 @@ Markdown 创建时间、历史列表日期和新记录标题日期统一按北�
 macOS 13+ 可直接安装发行包（当前提供 Apple Silicon / arm64）：
 
 1. 打开引导页：[下载引导页](download.html)，或前往 [GitHub Releases](https://github.com/Alver-Lin/Parrot/releases/latest)。
-2. 下载 `Parrot-1.0.1-arm64.pkg`，双击按提示安装到「应用程序」。
+2. 下载 `Parrot-1.0.3-arm64.pkg`，双击按提示安装到「应用程序」。
 3. 再次安装更高版本时，安装器会先退出并移除旧的 `/Applications/Parrot.app`，再写入新版本；`~/Library/Application Support/Parrot` 中的个人数据会保留。
 
 若系统提示无法打开未公证的安装包：打开「系统设置 → 隐私与安全性」允许仍要打开，或按住 Control 点击 `.pkg` 后选择「打开」。
@@ -94,10 +94,10 @@ cd ..
 
 ```bash
 cd frontend && npm run build && cd ..
-PARROT_VERSION=1.0.1 .venv/bin/python scripts/build-release.py
+PARROT_VERSION=1.0.3 .venv/bin/python scripts/build-release.py
 ```
 
-产物位于 `dist/release/Parrot-1.0.1-<arch>.pkg`。用户数据目录为 `~/Library/Application Support/Parrot`，不会写入应用包。
+产物位于 `dist/release/Parrot-1.0.3-<arch>.pkg`。用户数据目录为 `~/Library/Application Support/Parrot`，不会写入应用包。
 
 本机已有旧项目时，先运行 `.venv/bin/python scripts/setup-signing.py` 初始化一次签名身份。不要删除 `.data/signing/` 或将其中的密钥、密码提交到版本库。构建失败会保留原应用，不会自动降级为临时签名。
 
@@ -127,7 +127,7 @@ Whisper 为分段识别，通常积累 8–24 秒音频后输出一批文字；�
 
 ## 数据与本地服务
 
-本机构建默认沿用项目 `.data/`，历史笔记与模型缓存可继续使用。`soundscribe.db` 保存文字和记录；`<记录ID>/chunk-*.wav` 是识别临时片段；`models/` 缓存模型。备份前先退出客户端，再复制数据目录。
+本机构建默认使用项目 `.data/`，安装包使用 `~/Library/Application Support/Parrot`，两边互不共用。若安装版目录尚无学习记录，启动时会尝试从旧版项目 `.data/` 自动导入一次；导入后仍各自独立写入。`soundscribe.db` 保存文字和记录；`<记录ID>/chunk-*.wav` 是识别临时片段；`models/` 缓存模型。备份前先退出客户端，再复制数据目录。
 
 客户端自动启动独占的 Python 服务，使用随机回环端口和每次启动生成的访问令牌。转写与模型接口需要令牌，不作为日常浏览器入口。客户端退出时结束自己启动的服务；原生宿主异常消失时，后台所有者监控会尝试退出服务。
 

@@ -11,22 +11,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO = "Alver-Lin/Parrot"
-TAG = "v1.0.1"
-PKG = ROOT / "dist/release/Parrot-1.0.1-arm64.pkg"
-SHA = ROOT / "dist/release/Parrot-1.0.1-arm64.pkg.sha256"
+TAG = "v1.0.3"
+PKG = ROOT / "dist/release/Parrot-1.0.3-arm64.pkg"
+SHA = ROOT / "dist/release/Parrot-1.0.3-arm64.pkg.sha256"
 
-BODY = """## Parrot v1.0.1（macOS）
+BODY = """## Parrot v1.0.3（macOS）
 
 Apple Silicon（arm64）安装包。
 
 ### 更新内容
-- 更新应用图标与品牌标识
-- 优化识别设置布局与文稿 Tab 切换
-- Markdown / Preview 顶层切换，导出与润色操作收纳到 Markdown 页
-- 移除冗余关闭按钮与自动跟随开关，默认跟随最新转写
+- 修复从本机构建切换到安装包后学习记录看起来被清空的问题
+- 安装版与开发版继续使用独立数据目录；安装版仅在本地库为空时从旧 `.data` 导入一次
+- 之后重装或升级（含 1.0.1 → 1.0.3）只使用 `~/Library/Application Support/Parrot`，不会再用开发目录覆盖
 
 ### 安装
-1. 下载下方 `Parrot-1.0.1-arm64.pkg`
+1. 下载下方 `Parrot-1.0.3-arm64.pkg`
 2. 双击安装到「应用程序」
 3. 从启动台打开 Parrot
 
@@ -40,7 +39,7 @@ Apple Silicon（arm64）安装包。
 引导下载页：仓库内 `docs/download.html`
 
 ### 校验
-见附件 `Parrot-1.0.1-arm64.pkg.sha256`
+见附件 `Parrot-1.0.3-arm64.pkg.sha256`
 """
 
 
@@ -86,7 +85,7 @@ def ensure_release(token: str) -> dict:
             data=json.dumps(
                 {
                     "tag_name": TAG,
-                    "name": "Parrot v1.0.1",
+                    "name": "Parrot v1.0.3",
                     "body": BODY,
                     "draft": False,
                     "prerelease": False,
@@ -101,22 +100,22 @@ def ensure_release(token: str) -> dict:
         raise
 
 
-def upload(token: str, release: dict, path: Path):
-    upload_url = release["upload_url"].split("{", 1)[0]
-    existing = {asset["name"] for asset in release.get("assets", [])}
-    if path.name in existing:
-        print(f"已存在资产，跳过：{path.name}")
-        return
-    url = f"{upload_url}?name={path.name}"
-    print(f"上传 {path.name}（{path.stat().st_size // (1024 * 1024)} MB）…")
-    api(
-        token,
-        "POST",
-        url,
-        data=path.read_bytes(),
-        content_type="application/octet-stream",
-    )
-    print(f"已上传：{path.name}")
+def upload_asset(token: str, release: dict, path: Path):
+    name = path.name
+    for asset in release.get("assets", []):
+        if asset.get("name") == name:
+            api(token, "DELETE", asset["url"])
+    print(f"上传 {name}（{path.stat().st_size // (1024 * 1024)} MB）…")
+    upload_url = release["upload_url"].split("{", 1)[0] + f"?name={name}"
+    with path.open("rb") as handle:
+        api(
+            token,
+            "POST",
+            upload_url,
+            data=handle.read(),
+            content_type="application/octet-stream",
+        )
+    print(f"已上传：{name}")
 
 
 def main():
@@ -124,13 +123,14 @@ def main():
         raise SystemExit("缺少 dist/release 下的 pkg 或 sha256，请先运行 build-release.py。")
     token = github_token()
     release = ensure_release(token)
-    print(release["html_url"])
-    upload(token, release, PKG)
-    # Refresh release assets list after first upload when creating new release.
-    release = api(token, "GET", f"https://api.github.com/repos/{REPO}/releases/tags/{TAG}")
-    upload(token, release, SHA)
-    print("发布完成：", release["html_url"])
+    print(release.get("html_url", f"https://github.com/{REPO}/releases/tag/{TAG}"))
+    upload_asset(token, release, PKG)
+    upload_asset(token, release, SHA)
+    print(f"发布完成： https://github.com/{REPO}/releases/tag/{TAG}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)

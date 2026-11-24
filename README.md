@@ -37,10 +37,10 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 
 ## 四、下载安装
 
-当前发布版本为 **v1.0.1**，适用于 **macOS 13+ / Apple Silicon**。
+当前发布版本为 **v1.0.3**，适用于 **macOS 13+ / Apple Silicon**。
 
-- **安装包**：[下载 Parrot-1.0.1-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.1/Parrot-1.0.1-arm64.pkg)
-- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.1) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
+- **安装包**：[下载 Parrot-1.0.3-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.3/Parrot-1.0.3-arm64.pkg)
+- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.3) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
 
 双击 `.pkg` 按提示安装，再从「应用程序」打开 Parrot。发行包已捆绑 Python，日常使用无需另外安装 Python 或 Node.js。首次使用需要下载语音识别模型，并授权所选音频来源；AI 润色需自行配置兼容接口。
 
@@ -96,8 +96,9 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 
 **AI 润色会将待整理的标题、正文与本地截图预览发送到你配置的模型服务。** 代码、表格、链接、公式与记录元信息通过占位符留在本机，返回后恢复。仅点击「测试连接」时发送简短固定请求，不发送学习文稿或截图。API Key 保存在 macOS 登录钥匙串中。
 
-- **安装包版本的数据目录**：`~/Library/Application Support/Parrot/`
-- **源码开发版本的数据目录**：项目下的 `.data/`
+- **安装包数据目录**：`~/Library/Application Support/Parrot/`（升级只替换 App，不碰这里）
+- **源码 / 本机构建数据目录**：项目下的 `.data/`（与安装版是两套库，互不共用）
+- **兼容**：仅当安装版库仍为空时，会从旧 `.data` **自动导入一次**；写好标记后，之后任何重装/升级都不会再从 `.data` 覆盖安装版数据。
 - **保存内容**：文字记录、Markdown 文稿、润色原稿、手动截图、元信息与模型缓存。
 
 备份前先退出客户端，再复制数据目录。导出的文档若包含图片，移动或分享时请一并保留旁边的 `photo/` 文件夹。
