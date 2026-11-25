@@ -42,7 +42,7 @@ Markdown 创建时间、历史列表日期和新记录标题日期统一按北�
 - 可自由放置、记住位置并置顶的原生悬浮球，点击展开与收起转写面板。
 - 转写内容与 Markdown 双标签，历史记录与识别设置弹窗。
 - macOS 13+ 麦克风、本机声音及双声源混音采集，不需要虚拟声卡。
-- Whisper 本地中英文识别，Apple Silicon 优先 MLX，其他环境使用 faster-whisper CPU int8。
+- Qwen3-ASR 本地中英文识别（Apple Silicon / MLX），可选 0.6B 或 1.7B。
 - 静音过滤、时间标记、建议校对提示、逐段修改和历史记录续写。
 - 手动选区截图、转写图片预览，以及 Markdown 与 `photo/` 图片目录一起导出。
 - Markdown 全文编辑与自动保存、系统剪贴板复制、系统保存对话框导出；默认正文没有片段时间戳与空白行，保留英文单词之间的空格。编辑后的 Markdown 作为独立文稿保存，原始转写仍保留在「转写内容」页；建议转写完成后整理文稿。
@@ -55,7 +55,7 @@ Markdown 创建时间、历史列表日期和新记录标题日期统一按北�
 macOS 13+ 可直接安装发行包（当前提供 Apple Silicon / arm64）：
 
 1. 打开引导页：[下载引导页](download.html)，或前往 [GitHub Releases](https://github.com/Alver-Lin/Parrot/releases/latest)。
-2. 下载 `Parrot-1.0.2-arm64.pkg`，双击按提示安装到「应用程序」。
+2. 下载 `Parrot-1.0.3-arm64.pkg`，双击按提示安装到「应用程序」。
 3. 再次安装更高版本时，安装器会先退出并移除旧的 `/Applications/Parrot.app`，再写入新版本；`~/Library/Application Support/Parrot` 中的个人数据会保留。
 
 若系统提示无法打开未公证的安装包：打开「系统设置 → 隐私与安全性」允许仍要打开，或按住 Control 点击 `.pkg` 后选择「打开」。
@@ -94,10 +94,10 @@ cd ..
 
 ```bash
 cd frontend && npm run build && cd ..
-PARROT_VERSION=1.0.2 .venv/bin/python scripts/build-release.py
+PARROT_VERSION=1.0.3 .venv/bin/python scripts/build-release.py
 ```
 
-产物位于 `dist/release/Parrot-1.0.2-<arch>.pkg`。用户数据目录为 `~/Library/Application Support/Parrot`，不会写入应用包。
+产物位于 `dist/release/Parrot-1.0.3-<arch>.pkg`。用户数据目录为 `~/Library/Application Support/Parrot`，不会写入应用包。
 
 本机已有旧项目时，先运行 `.venv/bin/python scripts/setup-signing.py` 初始化一次签名身份。不要删除 `.data/signing/` 或将其中的密钥、密码提交到版本库。构建失败会保留原应用，不会自动降级为临时签名。
 
@@ -115,13 +115,13 @@ PARROT_VERSION=1.0.2 .venv/bin/python scripts/build-release.py
 
 ## 模型与准确率
 
-默认模型是 Whisper large-v3，优先识别质量；Turbo 更快，Small 更省资源。Apple Silicon 在安装 MLX Whisper 时自动选择 MLX，否则使用 faster-whisper CPU int8。加载失败不会自动切换引擎，可以在设置中选择其他引擎重试。
+默认模型是 Qwen3-ASR 0.6B（速度优先）；需要更高准确度时可改用 1.7B。仅支持 Apple Silicon。加载失败可在设置中切换模型后重试。
 
-中文课程选择中文，英语课程选择英语，不确定时选择自动检测。首次下载模型需要网络，Large v3 的历史缓存大小约 2.9GB；下载过程可查看 `.data/desktop.log`。
+中文课程选择中文，英语课程选择英语，不确定时选择自动检测。首次下载模型需要网络；下载过程可查看数据目录中的 `desktop.log`。
 
 聆听时可点击描边圆形按钮暂停，再点击继续接着同一条记录转写。暂停期间不采集声音、计时不增加；已采集的文字仍会处理。实心方框按钮用于结束记录。
 
-Whisper 为分段识别，通常积累 8–24 秒音频后输出一批文字；实际延迟还取决于设备与模型。收起面板后采集和识别继续，较慢设备可能积压待处理片段，停止后仍需等待剩余识别。
+识别为分段进行，通常积累 8–24 秒音频后输出一批文字；实际延迟还取决于设备与模型。收起面板后采集和识别继续，较慢设备可能积压待处理片段，停止后仍需等待剩余识别。
 
 没有模型能保证零错误。「建议校对」是启发式提示，不是准确率分数；没有标记的段落也可能出错。当前未在正式课程标注集上测定统一字错率。
 

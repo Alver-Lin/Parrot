@@ -813,6 +813,27 @@ button:focus-visible {
 .polish-configuration {
   scroll-margin-top: 12px;
 }
+.polish-fields .ant-input,
+.polish-fields .ant-input-affix-wrapper {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  box-sizing: border-box;
+}
+.polish-fields .ant-input-affix-wrapper {
+  display: inline-flex;
+  align-items: center;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+.polish-fields .ant-input-affix-wrapper > input.ant-input {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  line-height: 1.2;
+  font-size: 11px;
+}
 .polish-actions {
   display: flex;
   align-items: center;
@@ -832,9 +853,6 @@ button:focus-visible {
   font-size: 10px;
   line-height: 1;
   box-shadow: none;
-}
-.polish-configuration .ant-input-affix-wrapper > input.ant-input {
-  font-size: 11px;
 }
 .polish-key-visibility {
   display: inline-flex;

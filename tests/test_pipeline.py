@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import main
-from backend.asr import FASTER_WHISPER_MODELS, MLX_MODELS, cached_model_path, cached_models, clean_segments
+from backend.asr import ENGINE, QWEN_MODELS, cached_model_path, cached_models, clean_segments
 from backend.audio import Chunk, Chunker
 from backend.schemas import Settings
 from backend.service import TranscriptionService
@@ -90,10 +90,10 @@ def test_database_restart_marks_running_records_interrupted(tmp_path, state):
 
 class FixtureRecognizer:
     def __init__(self):
-        self.state = {"status": "ready", "message": "fixture", "engine": "faster-whisper", "model": "small"}
+        self.state = {"status": "ready", "message": "fixture", "engine": "qwen3", "model": "qwen3-0.6b"}
 
     def prepare(self, settings):
-        return "faster-whisper"
+        return "qwen3"
 
     def transcribe(self, chunk, settings):
         with wave.open(str(chunk.path)) as audio:
@@ -143,7 +143,7 @@ def test_system_capture_transcribe_edit_and_export_without_original_audio(client
     browser, store, service = client
     response = browser.post(
         "/api/sessions",
-        json=Settings(title="中英双语课程", model="small").model_dump(),
+        json=Settings(title="中英双语课程", model="qwen3-0.6b").model_dump(),
     )
     assert response.status_code == 201
     sid = response.json()["id"]
@@ -313,7 +313,7 @@ def test_polish_history_is_removed_with_the_record(client):
 @pytest.mark.parametrize("source", ["microphone", "system", "mixed"])
 def test_audio_source_is_saved_and_returned_for_new_records(client, source):
     browser, store, _ = client
-    response = browser.post("/api/sessions", json={"audio_source": source, "model": "small"})
+    response = browser.post("/api/sessions", json={"audio_source": source, "model": "qwen3-0.6b"})
     assert response.status_code == 201
     sid = response.json()["id"]
     result = wait_completed(browser, sid)
@@ -439,49 +439,43 @@ def test_screenshot_upload_limits_and_missing_record(client, monkeypatch):
     assert store.get(sid)["segments"] == []
 
 
-@pytest.mark.parametrize("engine,model", [("mlx", "large-v3"), ("mlx", "small"),
-                                         ("faster-whisper", "large-v3-turbo")])
-def test_download_status_checks_complete_matching_cache_without_network(tmp_path, monkeypatch, engine, model):
+@pytest.mark.parametrize("model", list(QWEN_MODELS))
+def test_download_status_checks_complete_matching_cache_without_network(tmp_path, monkeypatch, model):
     from huggingface_hub import HfApi, constants
 
-    monkeypatch.setattr("backend.asr.DATA", tmp_path)
     monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
 
     def no_network(*args, **kwargs):
         pytest.fail("Checking downloaded models must not access the network")
 
     monkeypatch.setattr(HfApi, "repo_info", no_network)
-    assert cached_model_path(engine, model) is None
-    root = tmp_path / "hub" if engine == "mlx" else tmp_path / "models" / "faster-whisper"
-    repository = (MLX_MODELS if engine == "mlx" else FASTER_WHISPER_MODELS)[model]
-    cache = root / ("models--" + repository.replace("/", "--"))
+    assert cached_model_path(ENGINE, model) is None
+    repository = QWEN_MODELS[model]
+    cache = tmp_path / "hub" / ("models--" + repository.replace("/", "--"))
     (cache / "refs").mkdir(parents=True)
     (cache / "refs" / "main").write_text("a" * 40)
     snapshot = cache / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)
     (snapshot / "config.json").write_text("{}")
-    assert cached_model_path(engine, model) is None
-    weights = snapshot / ("weights.npz" if engine == "mlx" else "model.bin")
+    assert cached_model_path(ENGINE, model) is None
+    weights = snapshot / "model.safetensors"
     weights.write_bytes(b"")
-    assert cached_model_path(engine, model) is None
+    assert cached_model_path(ENGINE, model) is None
     weights.write_bytes(b"weights fixture")
-    if engine != "mlx":
-        assert cached_model_path(engine, model) is None
-        (snapshot / "tokenizer.json").write_text("{}")
-        (snapshot / "vocabulary.json").write_text("[]")
-    assert cached_model_path(engine, model) == str(snapshot)
+    assert cached_model_path(ENGINE, model) == str(snapshot)
     availability = cached_models()["downloaded"]
-    assert availability[engine][model] is True
-    other_engine = "faster-whisper" if engine == "mlx" else "mlx"
-    assert availability[other_engine][model] is False
+    assert availability[ENGINE][model] is True
+    for other in QWEN_MODELS:
+        if other != model:
+            assert availability[ENGINE][other] is False
     weights.unlink()
     weights.symlink_to(tmp_path / "missing-weights")
-    assert cached_model_path(engine, model) is None
+    assert cached_model_path(ENGINE, model) is None
 
 
 def test_status_exposes_disk_cache_independently_of_loaded_model(client, monkeypatch):
     browser, _, service = client
-    availability = {"auto_engine": "mlx", "downloaded": {"mlx": {"large-v3": True}}}
+    availability = {"auto_engine": "qwen3", "downloaded": {"qwen3": {"qwen3-0.6b": True, "qwen3-1.7b": False}}}
     monkeypatch.setattr(main, "cached_models", lambda: availability)
     service.recognizer.state = {"status": "idle", "message": "", "engine": None, "model": None}
     status = browser.get("/api/status").json()
@@ -744,11 +738,11 @@ def test_continue_history_appends_to_same_record_and_cumulative_timeline(client,
 
     def prepare(settings):
         prepared.append(settings)
-        return "faster-whisper"
+        return "qwen3"
 
     monkeypatch.setattr("backend.service.asyncio.create_subprocess_exec", create_process)
     monkeypatch.setattr(service.recognizer, "prepare", prepare)
-    sid = store.create(Settings(title="历史课程", model="small", language="en", audio_source=source))
+    sid = store.create(Settings(title="历史课程", model="qwen3-0.6b", language="en", audio_source=source))
     with store.connect() as db:
         db.execute("UPDATE sessions SET vocabulary='旧版术语' WHERE id=?", (sid,))
     store.update(sid, status=state, duration=15, processed=15, error="旧错误" if state != "completed" else None)
@@ -780,7 +774,7 @@ def test_continue_history_appends_to_same_record_and_cumulative_timeline(client,
         assert "课程内容 Test." in exported
         assert not list(store.root.glob("*/*.wav"))
     assert len(result["segments"]) == 3
-    assert all(s.model == "small" and s.language == "en" and s.audio_source == source
+    assert all(s.model == "qwen3-0.6b" and s.language == "en" and s.audio_source == source
                and not hasattr(s, "vocabulary") for s in prepared)
     assert "vocabulary" not in result
     assert browser.post("/api/sessions/missing/continue").status_code == 404

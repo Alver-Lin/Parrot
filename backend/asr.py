@@ -1,121 +1,144 @@
-import importlib.util
 import math
 import wave
 from pathlib import Path
 
 import numpy as np
 
-from .config import APPLE_SILICON, DATA, SAMPLE_RATE
+from .config import APPLE_SILICON, SAMPLE_RATE
 
-MLX_MODELS = {
-    "large-v3": "mlx-community/whisper-large-v3-mlx",
-    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
-    "small": "mlx-community/whisper-small-mlx",
+QWEN_MODELS = {
+    "qwen3-0.6b": "Qwen/Qwen3-ASR-0.6B",
+    "qwen3-1.7b": "Qwen/Qwen3-ASR-1.7B",
 }
-FASTER_WHISPER_MODELS = {
-    "large-v3": "Systran/faster-whisper-large-v3",
-    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    "small": "Systran/faster-whisper-small",
-}
+LEGACY_WHISPER_MODELS = {"large-v3", "large-v3-turbo", "small"}
+ENGINE = "qwen3"
+
+
+def normalize_model(model: str) -> str:
+    if model in LEGACY_WHISPER_MODELS:
+        return "qwen3-0.6b"
+    return model
 
 
 def cached_model_path(engine, model):
-    """Inspect complete local snapshots without downloading or loading weights."""
+    """Inspect a complete local Qwen3-ASR snapshot without downloading."""
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import LocalEntryNotFoundError
 
-    repositories = MLX_MODELS if engine == "mlx" else FASTER_WHISPER_MODELS
+    model = normalize_model(model)
+    if engine not in (ENGINE, "auto", "mlx") or model not in QWEN_MODELS:
+        return None
     try:
-        path = Path(snapshot_download(
-            repositories[model], local_files_only=True,
-            **({"cache_dir": str(DATA / "models" / "faster-whisper")} if engine != "mlx" else {}),
-        ))
-        required = ["config.json"]
-        if engine == "mlx":
-            weights = ["weights.safetensors", "weights.npz"]
-        else:
-            required += ["tokenizer.json"]
-            weights = ["model.bin"]
-            if not any((path / name).is_file() and (path / name).stat().st_size > 0
-                       for name in ("vocabulary.json", "vocabulary.txt")):
-                return None
-        if (all((path / name).is_file() and (path / name).stat().st_size > 0 for name in required)
-                and any((path / name).is_file() and (path / name).stat().st_size > 0 for name in weights)):
-            return str(path)
-    except (LocalEntryNotFoundError, OSError):
-        pass
-    return None
+        path = Path(snapshot_download(QWEN_MODELS[model], local_files_only=True))
+        if not (path / "config.json").is_file():
+            return None
+        weights = [item for item in path.rglob("*.safetensors") if item.is_file() and item.stat().st_size > 0]
+        if not weights:
+            return None
+        return str(path)
+    except (LocalEntryNotFoundError, OSError, ValueError):
+        return None
 
 
 def cached_models():
     return {
-        "auto_engine": Recognizer.resolve_engine("auto"),
+        "auto_engine": ENGINE,
         "downloaded": {
-            engine: {model: cached_model_path(engine, model) is not None for model in MLX_MODELS}
-            for engine in ("mlx", "faster-whisper")
+            ENGINE: {model: cached_model_path(ENGINE, model) is not None for model in QWEN_MODELS},
         },
     }
+
+
+def _language_name(language: str) -> str | None:
+    if language == "zh":
+        return "Chinese"
+    if language == "en":
+        return "English"
+    return None
+
+
+def _segments_from_result(result, chunk):
+    """Normalize Qwen result into Whisper-like segments for clean_segments."""
+    timed = result.segments or []
+    if timed:
+        words = []
+        for item in timed:
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            words.append({
+                "word": text,
+                "start": float(item["start"]),
+                "end": float(item["end"]),
+            })
+        if words:
+            return [{
+                "text": "".join(word["word"] for word in words).strip(),
+                "start": words[0]["start"],
+                "end": words[-1]["end"],
+                "words": words,
+                "avg_logprob": -0.5,
+            }]
+    text = (result.text or "").strip()
+    if not text:
+        return []
+    # Alignment failed: assign the whole transcript to the new audio span.
+    start = max(0.0, chunk.cutoff - chunk.offset)
+    end = max(start + 0.05, chunk.end - chunk.offset)
+    return [{"text": text, "start": start, "end": end, "words": [], "avg_logprob": -0.5}]
 
 
 class Recognizer:
     """All model operations run on one dedicated thread, including MLX/Metal."""
 
     def __init__(self):
-        self.model = None
+        self.session = None
         self.key = None
         self.model_path = None
         self.state = {"status": "idle", "message": "开始转写时自动准备识别模型", "engine": None, "model": None}
 
     @staticmethod
     def resolve_engine(requested):
-        if requested == "auto":
-            return "mlx" if APPLE_SILICON and importlib.util.find_spec("mlx_whisper") else "faster-whisper"
-        if requested == "mlx" and not APPLE_SILICON:
-            raise ValueError("MLX 仅支持 Apple 芯片 Mac，请选择自动或 faster-whisper。")
-        return requested
+        if not APPLE_SILICON:
+            raise ValueError("Qwen3-ASR 仅支持 Apple 芯片 Mac。")
+        if requested in (None, "", "auto", "mlx", "faster-whisper", ENGINE):
+            return ENGINE
+        raise ValueError("当前仅支持 Qwen3-ASR（Apple Silicon / MLX）。")
 
     def prepare(self, settings):
         engine = self.resolve_engine(settings.engine)
-        key = (engine, settings.model)
-        if self.key == key and self.state["status"] == "ready":
+        model = normalize_model(settings.model)
+        key = (engine, model)
+        if self.key == key and self.state["status"] == "ready" and self.session is not None:
             return engine
         self.state = {
             "status": "loading",
             "message": "正在准备识别模型，请稍等片刻。",
             "engine": engine,
-            "model": settings.model,
+            "model": model,
         }
         try:
-            self.model_path = cached_model_path(engine, settings.model)
-            if engine == "mlx":
-                import mlx.core as mx
-                from mlx_whisper.transcribe import ModelHolder
+            from mlx_qwen3_asr import Session
 
-                self.model_path = self.model_path or MLX_MODELS[settings.model]
-                self.model = ModelHolder.get_model(self.model_path, mx.float16)
-            else:
-                from faster_whisper import WhisperModel
-
-                self.model = WhisperModel(
-                    self.model_path or settings.model,
-                    device="cpu",
-                    compute_type="int8",
-                    download_root=str(DATA / "models" / "faster-whisper"),
-                )
+            repo = QWEN_MODELS[model]
+            self.model_path = cached_model_path(engine, model) or repo
+            self.session = Session(repo)
             self.key = key
             self.state = {
                 "status": "ready",
                 "message": "模型已就绪",
                 "engine": engine,
-                "model": settings.model,
+                "model": model,
             }
             return engine
         except Exception as exc:
+            self.session = None
+            self.key = None
             self.state = {
                 "status": "error",
                 "message": f"模型加载失败：{exc}",
                 "engine": engine,
-                "model": settings.model,
+                "model": model,
             }
             raise
 
@@ -127,40 +150,22 @@ class Recognizer:
         if not len(samples) or np.max(np.abs(samples)) < 0.001:
             return []
 
-        # Use Silero to reject non-speech windows for both engines. Keep original
-        # audio/timeline intact rather than concatenating speech and shifting times.
-        from faster_whisper.vad import VadOptions, get_speech_timestamps
+        if self.session is None:
+            self.prepare(settings)
 
-        if not get_speech_timestamps(
-            samples, VadOptions(min_silence_duration_ms=500), sampling_rate=SAMPLE_RATE
-        ):
-            return []
-        prompt = (
-            "以下是课程的简体中文逐字稿，保留 English 专业术语。"
+        context = (
+            "课程 讲义 API Redis GPU 数据库 缓存 负载均衡"
             if settings.language != "en"
-            else "A lecture transcript with punctuation."
+            else "lecture transcript API Redis GPU"
         )
-        options = dict(
-            language=None if settings.language == "auto" else settings.language,
-            initial_prompt=prompt,
-            condition_on_previous_text=False,
-            word_timestamps=True,
-            temperature=0.0,
-            no_speech_threshold=0.6,
+        result = self.session.transcribe(
+            (samples, SAMPLE_RATE),
+            language=_language_name(settings.language),
+            context=context,
+            return_timestamps=True,
+            return_chunks=False,
         )
-        if self.key[0] == "mlx":
-            import mlx_whisper
-
-            result = mlx_whisper.transcribe(
-                samples, path_or_hf_repo=self.model_path, verbose=None, **options
-            )
-            segments = result["segments"]
-        else:
-            from dataclasses import asdict
-
-            output, _ = self.model.transcribe(samples, beam_size=5, vad_filter=True, **options)
-            segments = [asdict(segment) for segment in output]
-        return clean_segments(segments, chunk)
+        return clean_segments(_segments_from_result(result, chunk), chunk)
 
 
 def clean_segments(segments, chunk):

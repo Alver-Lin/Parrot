@@ -37,10 +37,10 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 
 ## 四、下载安装
 
-当前发布版本为 **v1.0.2**，适用于 **macOS 13+ / Apple Silicon**。
+当前发布版本为 **v1.0.3**，适用于 **macOS 13+ / Apple Silicon**。
 
-- **安装包**：[下载 Parrot-1.0.2-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.2/Parrot-1.0.2-arm64.pkg)
-- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.2) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
+- **安装包**：[下载 Parrot-1.0.3-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.3/Parrot-1.0.3-arm64.pkg)
+- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.3) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
 
 双击 `.pkg` 按提示安装，再从「应用程序」打开 Parrot。发行包已捆绑 Python，日常使用无需另外安装 Python 或 Node.js。首次使用需要下载语音识别模型，并授权所选音频来源；AI 润色需自行配置兼容接口。
 
@@ -51,7 +51,7 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 ### 边看边记，保留原始材料
 
 - **三种音频来源**：本机声音、麦克风或双声源混音，按学习场景切换。
-- **本地 Whisper 转写**：支持中文、英语与自动语言检测；提供 Large v3、Turbo 和 Small 模型选择。
+- **本地 Qwen3-ASR 转写**：支持中文、英语与自动语言检测；提供 0.6B（速度优先）与 1.7B（准确优先）模型选择。
 - **暂停与继续**：中途暂停不增加录制时长，恢复后接着同一条记录转写。
 - **逐段编辑**：按时间标记查看转写内容，直接修正识别错误，保留原始转写供后续参考。
 - **历史记录续写**：重新打开已有记录，追加新的讲解与截图。
@@ -107,7 +107,7 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 
 ### 为什么开始聆听后没有马上出现文字？
 
-Whisper 按音频片段识别，通常积累约 8–24 秒音频后输出一批文字。实际等待时间取决于设备与模型；首次加载或较慢设备可能需要更久，停止后也会继续处理剩余片段。
+识别按音频片段进行，通常积累约 8–24 秒音频后输出一批文字。实际等待时间取决于设备与模型；首次加载或较慢设备可能需要更久，停止后也会继续处理剩余片段。
 
 ### 为什么转写出现错字、重复句或无关内容？
 

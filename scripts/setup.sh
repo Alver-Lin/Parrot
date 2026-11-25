@@ -5,7 +5,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
   echo "Parrot 客户端目前仅支持 macOS 13+。"
   exit 1
 fi
-command -v python3 >/dev/null || { echo "请先安装 Python 3.9+（推荐 3.11/3.12）。"; exit 1; }
+command -v python3 >/dev/null || { echo "请先安装 Python 3.10+（推荐 3.12，Qwen3-ASR 需要）。"; exit 1; }
 command -v npm >/dev/null || { echo "请先安装 Node.js 20.19+ 或 22.12+。"; exit 1; }
 python3 -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements.txt

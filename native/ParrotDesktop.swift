@@ -4,6 +4,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 import ImageIO
+import SystemConfiguration
 import UniformTypeIdentifiers
 import WebKit
 
@@ -761,6 +762,31 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
         return resources.appendingPathComponent(configured).path
     }
 
+    /// GUI apps do not inherit shell proxy vars; Hugging Face downloads need HTTPS_PROXY.
+    func applySystemProxyEnvironment(_ env: inout [String: String]) {
+        let keys = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"]
+        if keys.contains(where: { !(env[$0] ?? "").isEmpty }) { return }
+        guard let settings = SCDynamicStoreCopyProxies(nil) as? [String: Any] else { return }
+
+        func proxyURL(enabledKey: String, hostKey: String, portKey: String, scheme: String) -> String? {
+            let enabled = (settings[enabledKey] as? NSNumber)?.boolValue == true
+                || (settings[enabledKey] as? Bool) == true
+            guard enabled, let host = settings[hostKey] as? String, !host.isEmpty else { return nil }
+            let port = (settings[portKey] as? NSNumber)?.intValue ?? (settings[portKey] as? Int) ?? 0
+            guard port > 0 else { return nil }
+            return "\(scheme)://\(host):\(port)"
+        }
+
+        let https = proxyURL(enabledKey: "HTTPSEnable", hostKey: "HTTPSProxy", portKey: "HTTPSPort", scheme: "http")
+            ?? proxyURL(enabledKey: "HTTPEnable", hostKey: "HTTPProxy", portKey: "HTTPPort", scheme: "http")
+            ?? proxyURL(enabledKey: "SOCKSEnable", hostKey: "SOCKSProxy", portKey: "SOCKSPort", scheme: "socks5")
+        guard let https else { return }
+        for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+            env[key] = https
+        }
+        logNative("已将系统代理交给语音服务：\(https)")
+    }
+
     func startBackend() throws {
         port = try unusedPort()
         guard let resources = Bundle.main.resourceURL,
@@ -780,6 +806,7 @@ final class ParrotApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavi
         env["PARROT_DATA"] = dataDirectory.path
         env["PARROT_DESKTOP_TOKEN"] = token
         env["PARROT_CAPTURE_BINARY"] = executable.deletingLastPathComponent().appendingPathComponent("ParrotCapture").path
+        applySystemProxyEnvironment(&env)
         process.environment = env
         let logURL = dataDirectory.appendingPathComponent("desktop.log")
         if !FileManager.default.fileExists(atPath: logURL.path) { FileManager.default.createFile(atPath: logURL.path, contents: nil) }

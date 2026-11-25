@@ -7,8 +7,8 @@ export interface Settings {
   title: string;
   audio_source: AudioSource;
   language: "auto" | "zh" | "en";
-  model: "large-v3" | "large-v3-turbo" | "small";
-  engine: "auto" | "mlx" | "faster-whisper";
+  model: "qwen3-0.6b" | "qwen3-1.7b";
+  engine: "qwen3";
 }
 
 export interface Segment {
@@ -38,7 +38,7 @@ export interface Session extends Settings {
 
 export interface Status {
   model_cache: {
-    auto_engine: "mlx" | "faster-whisper";
+    auto_engine: "qwen3";
     downloaded: Record<string, Record<string, boolean>>;
   };
   model: {

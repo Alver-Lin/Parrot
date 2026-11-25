@@ -8,10 +8,10 @@ from .schemas import Settings
 
 def main():
     parser = argparse.ArgumentParser(description="预加载 Parrot 系统声音识别模型")
-    parser.add_argument("--model", choices=["large-v3", "large-v3-turbo", "small"], default="large-v3")
-    parser.add_argument("--engine", choices=["auto", "mlx", "faster-whisper"], default="auto")
+    parser.add_argument("--model", choices=["qwen3-0.6b", "qwen3-1.7b"], default="qwen3-0.6b")
+    parser.add_argument("--engine", choices=["qwen3", "auto"], default="qwen3")
     args = parser.parse_args()
-    settings = Settings(model=args.model, engine=args.engine)
+    settings = Settings(model=args.model, engine="qwen3")
     recognizer = Recognizer()
     engine = recognizer.prepare(settings)
     print(f"Ready: {engine} / {args.model}", flush=True)

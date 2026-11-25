@@ -75,8 +75,8 @@ const settings = reactive<Settings>({
   title: "",
   audio_source: "system",
   language: "zh",
-  model: "large-v3",
-  engine: "auto",
+  model: "qwen3-0.6b",
+  engine: "qwen3",
 });
 const status = ref<Status | null>(null);
 const sessions = ref<Session[]>([]);
@@ -217,9 +217,8 @@ const statusNames: Record<string, string> = {
   interrupted: "已中断",
 };
 const modelOptions = [
-  { value: "large-v3", label: "Large v3 · 准确优先" },
-  { value: "large-v3-turbo", label: "Large v3 Turbo · 速度优先" },
-  { value: "small", label: "Small · 低内存" },
+  { value: "qwen3-0.6b", label: "Qwen3-ASR 0.6B · 速度优先" },
+  { value: "qwen3-1.7b", label: "Qwen3-ASR 1.7B · 准确优先" },
 ];
 const languageOptions = [
   { value: "zh", label: "中文" },
@@ -250,12 +249,11 @@ const authorizationDescription = computed(() => !isDesktop ? "请在 Parrot 桌�
     : !capturePermissions.value ? "正在检查当前音频来源所需权限。"
       : authorizationReady.value ? "当前音频来源所需权限已开启。"
         : `缺少${missingPermissions.value.map(item => item.label).join("、")}权限，点击前往授权。`);
-const selectedEngine = computed(() => settings.engine === "auto"
-  ? status.value?.model_cache.auto_engine : settings.engine);
-const selectedModelDownloaded = computed(() => !!selectedEngine.value &&
-  !!status.value?.model_cache.downloaded[selectedEngine.value]?.[settings.model]);
+const selectedEngine = computed(() => "qwen3" as const);
+const selectedModelDownloaded = computed(() =>
+  !!status.value?.model_cache.downloaded.qwen3?.[settings.model]);
 const selectedModelMatches = computed(() => status.value?.model.model === settings.model &&
-  status.value?.model.engine === selectedEngine.value);
+  status.value?.model.engine === "qwen3");
 const modelLabel = computed(() => selectedModelDownloaded.value ? "识别模型已下载"
   : selectedModelMatches.value && modelLoading.value ? "识别模型下载中"
     : selectedModelMatches.value && status.value?.model.status === "error"
@@ -523,7 +521,7 @@ async function prepareModel() {
     });
     if (status.value) status.value.model = {
       status: "loading", message: "正在下载所选模型，请稍等片刻。",
-      engine: selectedEngine.value ?? null, model: settings.model,
+      engine: "qwen3", model: settings.model,
     };
     message.info("开始下载模型，请保持网络连接");
   } catch (error) {
@@ -1197,7 +1195,7 @@ onUnmounted(() => {
           <section class="settings-section" aria-label="识别参数">
             <header class="settings-section-header">
               <h3>识别参数</h3>
-              <span>音频采集与本地 Whisper</span>
+              <span>音频采集与本地 Qwen3-ASR</span>
             </header>
             <a-form layout="vertical" :disabled="busy || modelLoading">
               <a-form-item label="音频来源">
@@ -1214,20 +1212,10 @@ onUnmounted(() => {
                 <a-form-item label="音频语言">
                   <a-select v-model:value="settings.language" :options="languageOptions" />
                 </a-form-item>
-                <a-form-item label="识别模型">
+                <a-form-item label="识别模型" class="settings-form-item-last">
                   <a-select v-model:value="settings.model" :options="modelOptions" />
                 </a-form-item>
               </div>
-              <a-form-item label="推理引擎" class="settings-form-item-last">
-                <a-select
-                  v-model:value="settings.engine"
-                  :options="[
-                    { value: 'auto', label: '自动选择（推荐）' },
-                    { value: 'mlx', label: 'MLX · Apple 芯片' },
-                    { value: 'faster-whisper', label: 'faster-whisper · CPU' },
-                  ]"
-                />
-              </a-form-item>
             </a-form>
           </section>
 
