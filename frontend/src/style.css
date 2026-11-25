@@ -735,26 +735,38 @@ button:focus-visible {
 }
 .client-modal .ant-input,
 .client-modal .ant-input-affix-wrapper,
-.client-modal .ant-select {
+.client-modal .ant-select,
+.client-modal .ant-input-number {
   font-size: 11px;
+  width: 100%;
 }
 .client-modal .ant-select-selector,
 .client-modal .ant-input,
-.client-modal .ant-input-affix-wrapper {
+.client-modal .ant-input-affix-wrapper,
+.client-modal .ant-input-number {
+  height: 32px !important;
   min-height: 32px !important;
   border-radius: 8px !important;
   border-color: #e6ebf5 !important;
   box-shadow: none !important;
+  box-sizing: border-box;
 }
 .client-modal .ant-select-focused .ant-select-selector,
 .client-modal .ant-input:focus,
-.client-modal .ant-input-affix-wrapper-focused {
+.client-modal .ant-input-affix-wrapper-focused,
+.client-modal .ant-input-number-focused {
   border-color: #4263eb !important;
   box-shadow: 0 0 0 2px #4263eb14 !important;
 }
 .client-modal .ant-select-selector {
   font-size: 11px !important;
+  display: flex !important;
   align-items: center;
+  padding-inline: 11px !important;
+}
+.client-modal .ant-select-selection-item,
+.client-modal .ant-select-selection-placeholder {
+  line-height: 30px !important;
 }
 .client-modal textarea.ant-input {
   line-height: 1.9;

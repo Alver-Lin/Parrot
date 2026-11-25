@@ -37,10 +37,10 @@ Parrot 是一款面向**读写型学习者**的 macOS 视频学习工具，将�
 
 ## 四、下载安装
 
-当前发布版本为 **v1.0.3**，适用于 **macOS 13+ / Apple Silicon**。
+当前发布版本为 **v1.0.4**，适用于 **macOS 13+ / Apple Silicon**。
 
-- **安装包**：[下载 Parrot-1.0.3-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.3/Parrot-1.0.3-arm64.pkg)
-- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.3) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
+- **安装包**：[下载 Parrot-1.0.4-arm64.pkg](https://github.com/Alver-Lin/Parrot/releases/download/v1.0.4/Parrot-1.0.4-arm64.pkg)
+- **版本记录**：[查看发布说明](https://github.com/Alver-Lin/Parrot/releases/tag/v1.0.4) · [浏览所有版本](https://github.com/Alver-Lin/Parrot/releases)
 
 双击 `.pkg` 按提示安装，再从「应用程序」打开 Parrot。发行包已捆绑 Python，日常使用无需另外安装 Python 或 Node.js。首次使用需要下载语音识别模型，并授权所选音频来源；AI 润色需自行配置兼容接口。
 

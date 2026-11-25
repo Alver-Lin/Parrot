@@ -47,6 +47,8 @@ export interface Status {
     engine: string | null;
     model: string | null;
   };
+  model_loaded?: boolean;
+  model_idle_minutes?: number;
   active_id: string | null;
   active_status: string | null;
   level: number;

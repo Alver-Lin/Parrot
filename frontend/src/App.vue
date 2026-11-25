@@ -94,6 +94,8 @@ const capturePermissions = ref<CapturePermissions | null>(null);
 const permissionCheckFailed = ref(false);
 const authorizationPending = ref(false);
 const modelRequestPending = ref(false);
+const idleMinutesSaving = ref(false);
+const idleMinutes = ref(5);
 let permissionRefresh: Promise<void> | undefined;
 const transcript = ref<HTMLElement>();
 const editingId = ref<number | null>(null);
@@ -254,6 +256,14 @@ const selectedModelDownloaded = computed(() =>
   !!status.value?.model_cache.downloaded.qwen3?.[settings.model]);
 const selectedModelMatches = computed(() => status.value?.model.model === settings.model &&
   status.value?.model.engine === "qwen3");
+const idleMinutePresets = [1, 3, 5, 10, 15, 30, 60];
+const idleMinuteOptions = computed(() => {
+  const current = idleMinutes.value;
+  const values = idleMinutePresets.includes(current)
+    ? idleMinutePresets
+    : [...idleMinutePresets, current].sort((a, b) => a - b);
+  return values.map((minutes) => ({ value: minutes, label: `${minutes} 分钟` }));
+});
 const modelLabel = computed(() => selectedModelDownloaded.value ? "识别模型已下载"
   : selectedModelMatches.value && modelLoading.value ? "识别模型下载中"
     : selectedModelMatches.value && status.value?.model.status === "error"
@@ -278,6 +288,9 @@ async function refresh() {
     ]);
     if (disposed) return;
     status.value = health;
+    if (typeof health.model_idle_minutes === "number") {
+      idleMinutes.value = health.model_idle_minutes;
+    }
     sessions.value = history;
     connected.value = true;
     updateOrb(!!health.active_id, health.level, true,
@@ -529,6 +542,25 @@ async function prepareModel() {
   } finally {
     pending.value = false;
     modelRequestPending.value = false;
+  }
+}
+
+async function changeIdleMinutes(value: number | string | null) {
+  const minutes = Math.max(1, Math.min(120, Number(value) || 5));
+  idleMinutes.value = minutes;
+  if (idleMinutesSaving.value) return;
+  idleMinutesSaving.value = true;
+  try {
+    const result = await api<{ model_idle_minutes: number }>("/model/idle-minutes", {
+      method: "PUT",
+      body: JSON.stringify({ minutes }),
+    });
+    idleMinutes.value = result.model_idle_minutes;
+    if (status.value) status.value.model_idle_minutes = result.model_idle_minutes;
+  } catch (error) {
+    showError(error);
+  } finally {
+    idleMinutesSaving.value = false;
   }
 }
 
@@ -1198,22 +1230,33 @@ onUnmounted(() => {
               <span>音频采集与本地 Qwen3-ASR</span>
             </header>
             <a-form layout="vertical" :disabled="busy || modelLoading">
-              <a-form-item label="音频来源">
-                <a-select
-                  id="audio-source-select"
-                  aria-label="音频来源"
-                  :value="settings.audio_source"
-                  :options="audioSourceOptions"
-                  :disabled="busy || modelLoading || audioSourceLoading"
-                  @change="changeAudioSource"
-                />
-              </a-form-item>
               <div class="settings-pair">
+                <a-form-item label="音频来源">
+                  <a-select
+                    id="audio-source-select"
+                    aria-label="音频来源"
+                    :value="settings.audio_source"
+                    :options="audioSourceOptions"
+                    :disabled="busy || modelLoading || audioSourceLoading"
+                    @change="changeAudioSource"
+                  />
+                </a-form-item>
                 <a-form-item label="音频语言">
                   <a-select v-model:value="settings.language" :options="languageOptions" />
                 </a-form-item>
+              </div>
+              <div class="settings-pair">
                 <a-form-item label="识别模型" class="settings-form-item-last">
                   <a-select v-model:value="settings.model" :options="modelOptions" />
+                </a-form-item>
+                <a-form-item label="空闲释放" class="settings-form-item-last">
+                  <a-select
+                    :value="idleMinutes"
+                    :options="idleMinuteOptions"
+                    :disabled="busy || modelLoading || idleMinutesSaving"
+                    placeholder="选择释放时间"
+                    @change="changeIdleMinutes"
+                  />
                 </a-form-item>
               </div>
             </a-form>

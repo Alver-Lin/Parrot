@@ -90,10 +90,20 @@ def test_database_restart_marks_running_records_interrupted(tmp_path, state):
 
 class FixtureRecognizer:
     def __init__(self):
+        self.session = object()
+        self.releases = 0
         self.state = {"status": "ready", "message": "fixture", "engine": "qwen3", "model": "qwen3-0.6b"}
 
     def prepare(self, settings):
+        self.session = object()
+        self.state = {"status": "ready", "message": "fixture", "engine": "qwen3", "model": "qwen3-0.6b"}
         return "qwen3"
+
+    def release(self):
+        self.releases += 1
+        self.session = None
+        self.state = {"status": "idle", "message": "开始转写时自动准备识别模型", "engine": None, "model": None}
+        return True
 
     def transcribe(self, chunk, settings):
         with wave.open(str(chunk.path)) as audio:
@@ -473,6 +483,34 @@ def test_download_status_checks_complete_matching_cache_without_network(tmp_path
     assert cached_model_path(ENGINE, model) is None
 
 
+@pytest.mark.parametrize("model", list(QWEN_MODELS))
+def test_download_status_accepts_weights_when_hf_snapshot_marked_incomplete(tmp_path, monkeypatch, model):
+    """HF may require README/.gitattributes; inference only needs config + weights."""
+    from huggingface_hub import constants
+    from huggingface_hub.errors import IncompleteSnapshotError
+
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
+    repository = QWEN_MODELS[model]
+    cache = tmp_path / "hub" / ("models--" + repository.replace("/", "--"))
+    (cache / "refs").mkdir(parents=True)
+    (cache / "refs" / "main").write_text("b" * 40)
+    snapshot = cache / "snapshots" / ("b" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}")
+    (snapshot / "model.safetensors").write_bytes(b"weights fixture")
+
+    def incomplete(*args, **kwargs):
+        raise IncompleteSnapshotError(
+            f"The cached snapshot for '{repository}' is incomplete: 2 file(s) are missing "
+            "(.gitattributes, README.md).",
+            str(snapshot),
+        )
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", incomplete)
+    assert cached_model_path(ENGINE, model) == str(snapshot)
+    assert cached_models()["downloaded"][ENGINE][model] is True
+
+
 def test_status_exposes_disk_cache_independently_of_loaded_model(client, monkeypatch):
     browser, _, service = client
     availability = {"auto_engine": "qwen3", "downloaded": {"qwen3": {"qwen3-0.6b": True, "qwen3-1.7b": False}}}
@@ -530,6 +568,64 @@ def test_delete_session_removes_text_and_files(client):
     assert browser.get(f"/api/sessions/{sid}").status_code == 404
     assert browser.get("/api/sessions").json() == []
     assert not (store.root / sid).exists()
+
+
+def test_idle_release_unloads_model_after_delay_unless_recording_restarts(client, monkeypatch):
+    browser, store, service = client
+    monkeypatch.setattr("backend.service.model_idle_seconds", lambda: 0.05)
+
+    async def capture(sid, queue):
+        store.update(sid, status="recording")
+        await asyncio.sleep(0.02)
+        store.update(sid, duration=1)
+
+    monkeypatch.setattr(service, "capture_system", capture)
+    first = browser.post("/api/sessions", json={}).json()["id"]
+    wait_completed(browser, first)
+    assert service._idle_release_task is not None
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and service.recognizer.releases < 1:
+        time.sleep(0.01)
+    assert service.recognizer.releases == 1
+    assert service.recognizer.state["status"] == "idle"
+    assert browser.get("/api/status").json()["model"]["status"] == "idle"
+    assert browser.get("/api/status").json()["model_loaded"] is False
+
+    second = browser.post("/api/sessions", json={}).json()["id"]
+    wait_completed(browser, second)
+    assert service.recognizer.releases == 1
+    assert service._idle_release_task is not None
+    third = browser.post("/api/sessions", json={}).json()["id"]
+    wait_completed(browser, third)
+    # Restarting within the idle window cancels unload; only the later idle fires.
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and service.recognizer.releases < 2:
+        time.sleep(0.01)
+    assert service.recognizer.releases == 2
+
+
+def test_idle_minutes_setting_and_manual_release(client, tmp_path, monkeypatch):
+    browser, _, service = client
+    monkeypatch.setattr("backend.preferences.PREFS_PATH", tmp_path / "preferences.json")
+    service.recognizer.session = object()
+    service.recognizer.state = {"status": "ready", "message": "fixture", "engine": "qwen3", "model": "qwen3-0.6b"}
+
+    status = browser.get("/api/status").json()
+    assert status["model_loaded"] is True
+    assert status["model_idle_minutes"] == 5
+
+    updated = browser.put("/api/model/idle-minutes", json={"minutes": 8}).json()
+    assert updated == {"model_idle_minutes": 8}
+    assert browser.get("/api/status").json()["model_idle_minutes"] == 8
+    assert browser.put("/api/model/idle-minutes", json={"minutes": 0}).status_code == 422
+    assert browser.put("/api/model/idle-minutes", json={"minutes": 121}).status_code == 422
+
+    released = browser.post("/api/model/release").json()
+    assert released["released"] is True
+    assert released["model_loaded"] is False
+    assert browser.get("/api/status").json()["model_loaded"] is False
+    assert service.recognizer.releases == 1
+    assert browser.post("/api/model/release").json()["released"] is True
 
 
 def test_cannot_delete_active_session(client, monkeypatch):

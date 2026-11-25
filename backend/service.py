@@ -8,6 +8,7 @@ from threading import Event
 from .asr import Recognizer
 from .audio import Chunker
 from .config import CAPTURE_BINARY, SAMPLE_RATE
+from .preferences import model_idle_seconds
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,8 @@ class TranscriptionService:
         self.pause_requested = False
         # Bind the event in launch(), inside the actual serving loop (Python 3.9).
         self.resume_event = None
+        self._idle_release_task = None
+        self.closing = False
 
     @property
     def busy(self):
@@ -33,6 +36,43 @@ class TranscriptionService:
     async def infer(self, func, *args):
         return await asyncio.get_running_loop().run_in_executor(self.executor, func, *args)
 
+    def cancel_idle_release(self):
+        task = self._idle_release_task
+        self._idle_release_task = None
+        if task and not task.done():
+            task.cancel()
+
+    def schedule_idle_release(self, delay=None):
+        """Unload the ASR model after idle delay unless a new recording starts.
+
+        May be called from run()'s finally while the current task is still
+        finishing; the delayed check uses busy only after the wait.
+        """
+        if self.closing:
+            return
+        seconds = model_idle_seconds() if delay is None else delay
+        self.cancel_idle_release()
+
+        async def wait_then_release():
+            try:
+                await asyncio.sleep(seconds)
+                if self.closing or self.busy:
+                    return
+                released = await self.infer(self.recognizer.release)
+                if released:
+                    log.info("Released ASR model after %.0fs idle", seconds)
+            except asyncio.CancelledError:
+                raise
+
+        self._idle_release_task = asyncio.create_task(wait_then_release())
+
+    async def release_model(self, *, force: bool = False):
+        """Unload the ASR model now. force=True skips the busy guard (shutdown)."""
+        self.cancel_idle_release()
+        if not force and self.busy:
+            raise ValueError("录入进行中，无法释放识别模型。")
+        return await self.infer(self.recognizer.release)
+
     def launch(self, settings, sid=None):
         if self.busy:
             raise ValueError("已有任务运行中，请先停止并等待转写完成。")
@@ -40,6 +80,7 @@ class TranscriptionService:
             raise ValueError("Parrot 的音频采集仅支持 macOS 13+。")
         if not CAPTURE_BINARY.exists():
             raise ValueError("音频采集组件未编译，请运行 ./scripts/build-capture.sh。")
+        self.cancel_idle_release()
         if sid is None:
             sid = self.store.create(settings)
         else:
@@ -121,6 +162,8 @@ class TranscriptionService:
             for path in (self.store.root / sid).glob("chunk-*.wav"):
                 path.unlink(missing_ok=True)
             self.level = 0.0
+            if not self.closing:
+                self.schedule_idle_release()
 
     async def consume(self, sid, settings, queue):
         while True:
@@ -223,6 +266,8 @@ class TranscriptionService:
                 await error_task
 
     async def close(self):
+        self.closing = True
+        self.cancel_idle_release()
         self.stop()
         if self.task and not self.task.done():
             try:
@@ -231,4 +276,6 @@ class TranscriptionService:
                 self.task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self.task
+        with suppress(Exception):
+            await self.release_model(force=True)
         self.executor.shutdown(wait=False)

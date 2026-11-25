@@ -14,8 +14,8 @@ from pathlib import Path
 from client_signing import resolve_identity
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = os.environ.get("PARROT_VERSION", "1.0.3").strip() or "1.0.3"
-BUNDLE_VERSION = os.environ.get("PARROT_BUNDLE_VERSION", "4").strip() or "4"
+VERSION = os.environ.get("PARROT_VERSION", "1.0.4").strip() or "1.0.4"
+BUNDLE_VERSION = os.environ.get("PARROT_BUNDLE_VERSION", "5").strip() or "5"
 IDENTIFIER = "com.alverlin.parrot"
 PKG_ID = "com.alverlin.parrot.pkg"
 

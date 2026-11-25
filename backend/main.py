@@ -19,7 +19,8 @@ from starlette.background import BackgroundTask
 from .asr import cached_models
 from .config import APPLE_SILICON, CAPTURE_BINARY, DESKTOP_TOKEN, ROOT
 from .photos import MAX_SCREENSHOT_BYTES, validate_png
-from .schemas import ApplyPolish, EditMarkdown, EditSegment, Settings, UndoPolish
+from .preferences import model_idle_minutes, save as save_preferences
+from .schemas import ApplyPolish, EditMarkdown, EditSegment, IdleReleaseSettings, Settings, UndoPolish
 from .service import TranscriptionService
 from .store import Store, markdown
 
@@ -36,7 +37,7 @@ async def lifespan(app):
     await service.close()
 
 
-app = FastAPI(title="Parrot", version="1.0.3", lifespan=lifespan)
+app = FastAPI(title="Parrot", version="1.0.4", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -81,8 +82,11 @@ def require_idle():
 @app.get("/api/status")
 async def status():
     active_id = service.active_id if service.busy else None
+    model_state = service.recognizer.state
     return {
-        "model": service.recognizer.state,
+        "model": model_state,
+        "model_loaded": model_state.get("status") == "ready" and service.recognizer.session is not None,
+        "model_idle_minutes": model_idle_minutes(),
         "model_cache": cached_models(),
         "active_id": active_id,
         "active_status": store.get_status(active_id) if active_id else None,
@@ -97,15 +101,42 @@ async def status():
 async def prepare(settings: Settings):
     global prepare_task
     require_idle()
+    service.cancel_idle_release()
 
     async def load():
         try:
             await service.infer(service.recognizer.prepare, settings)
         except Exception:
             logging.getLogger(__name__).exception("Model preparation failed")
+        finally:
+            if not service.busy and not service.closing:
+                service.schedule_idle_release()
 
     prepare_task = asyncio.create_task(load())
     return {"message": "模型加载已开始"}
+
+
+@app.put("/api/model/idle-minutes")
+async def update_idle_minutes(body: IdleReleaseSettings):
+    prefs = save_preferences({"model_idle_minutes": body.minutes})
+    # Apply the new delay to any pending idle unload countdown.
+    if service.recognizer.session is not None and not service.busy and not service.closing:
+        service.schedule_idle_release()
+    return {"model_idle_minutes": prefs["model_idle_minutes"]}
+
+
+@app.post("/api/model/release")
+async def release_model():
+    require_idle()
+    try:
+        released = await service.release_model()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        "released": bool(released),
+        "model": service.recognizer.state,
+        "model_loaded": False,
+    }
 
 
 @app.get("/api/sessions")

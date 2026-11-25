@@ -42,3 +42,7 @@ class ApplyPolish(BaseModel):
 class UndoPolish(BaseModel):
     revision_id: int = Field(gt=0)
     base_content: str = Field(max_length=1000000)
+
+
+class IdleReleaseSettings(BaseModel):
+    minutes: int = Field(default=5, ge=1, le=120)

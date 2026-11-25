@@ -1,3 +1,4 @@
+import gc
 import math
 import wave
 from pathlib import Path
@@ -20,24 +21,66 @@ def normalize_model(model: str) -> str:
     return model
 
 
+def _usable_snapshot(path: Path) -> bool:
+    """True when config + non-empty weights exist (README/.gitattributes optional)."""
+    if not (path / "config.json").is_file():
+        return False
+    return any(
+        item.is_file() and item.stat().st_size > 0
+        for item in path.rglob("*.safetensors")
+    )
+
+
+def _scan_local_snapshot(repo: str) -> Path | None:
+    """Find a usable snapshot even if HF marks the tree incomplete."""
+    from huggingface_hub import constants
+
+    root = Path(constants.HF_HUB_CACHE) / f"models--{repo.replace('/', '--')}"
+    snaps = root / "snapshots"
+    if not snaps.is_dir():
+        return None
+    ordered: list[Path] = []
+    ref = root / "refs" / "main"
+    if ref.is_file():
+        pinned = snaps / ref.read_text().strip()
+        if pinned.is_dir():
+            ordered.append(pinned)
+    ordered.extend(
+        sorted(
+            (item for item in snaps.iterdir() if item.is_dir() and item not in ordered),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    )
+    for snapshot in ordered:
+        if _usable_snapshot(snapshot):
+            return snapshot
+    return None
+
+
 def cached_model_path(engine, model):
-    """Inspect a complete local Qwen3-ASR snapshot without downloading."""
+    """Inspect a local Qwen3-ASR snapshot without downloading."""
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     model = normalize_model(model)
     if engine not in (ENGINE, "auto", "mlx") or model not in QWEN_MODELS:
         return None
+    repo = QWEN_MODELS[model]
     try:
-        path = Path(snapshot_download(QWEN_MODELS[model], local_files_only=True))
-        if not (path / "config.json").is_file():
-            return None
-        weights = [item for item in path.rglob("*.safetensors") if item.is_file() and item.stat().st_size > 0]
-        if not weights:
-            return None
-        return str(path)
-    except (LocalEntryNotFoundError, OSError, ValueError):
+        path = Path(snapshot_download(repo, local_files_only=True))
+        if _usable_snapshot(path):
+            return str(path)
         return None
+    except LocalEntryNotFoundError as exc:
+        # IncompleteSnapshotError (missing README etc.) still exposes snapshot_path.
+        hinted = getattr(exc, "snapshot_path", None)
+        if hinted and _usable_snapshot(Path(hinted)):
+            return str(Path(hinted))
+    except (OSError, ValueError):
+        pass
+    found = _scan_local_snapshot(repo)
+    return str(found) if found else None
 
 
 def cached_models():
@@ -122,7 +165,8 @@ class Recognizer:
 
             repo = QWEN_MODELS[model]
             self.model_path = cached_model_path(engine, model) or repo
-            self.session = Session(repo)
+            # Prefer local snapshot so incomplete HF metadata / offline still load.
+            self.session = Session(self.model_path)
             self.key = key
             self.state = {
                 "status": "ready",
@@ -141,6 +185,28 @@ class Recognizer:
                 "model": model,
             }
             raise
+
+    def release(self):
+        """Drop the loaded model so Metal/RAM can be reclaimed while idle."""
+        if self.session is None and self.state.get("status") == "idle":
+            return False
+        self.session = None
+        self.key = None
+        self.model_path = None
+        self.state = {
+            "status": "idle",
+            "message": "开始转写时自动准备识别模型",
+            "engine": None,
+            "model": None,
+        }
+        gc.collect()
+        try:
+            import mlx.core as mx
+
+            mx.clear_cache()
+        except Exception:
+            pass
+        return True
 
     def transcribe(self, chunk, settings):
         with wave.open(str(chunk.path), "rb") as audio:

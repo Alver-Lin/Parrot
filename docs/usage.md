@@ -55,7 +55,7 @@ Markdown 创建时间、历史列表日期和新记录标题日期统一按北�
 macOS 13+ 可直接安装发行包（当前提供 Apple Silicon / arm64）：
 
 1. 打开引导页：[下载引导页](download.html)，或前往 [GitHub Releases](https://github.com/Alver-Lin/Parrot/releases/latest)。
-2. 下载 `Parrot-1.0.3-arm64.pkg`，双击按提示安装到「应用程序」。
+2. 下载 `Parrot-1.0.4-arm64.pkg`，双击按提示安装到「应用程序」。
 3. 再次安装更高版本时，安装器会先退出并移除旧的 `/Applications/Parrot.app`，再写入新版本；`~/Library/Application Support/Parrot` 中的个人数据会保留。
 
 若系统提示无法打开未公证的安装包：打开「系统设置 → 隐私与安全性」允许仍要打开，或按住 Control 点击 `.pkg` 后选择「打开」。
@@ -94,10 +94,10 @@ cd ..
 
 ```bash
 cd frontend && npm run build && cd ..
-PARROT_VERSION=1.0.3 .venv/bin/python scripts/build-release.py
+PARROT_VERSION=1.0.4 .venv/bin/python scripts/build-release.py
 ```
 
-产物位于 `dist/release/Parrot-1.0.3-<arch>.pkg`。用户数据目录为 `~/Library/Application Support/Parrot`，不会写入应用包。
+产物位于 `dist/release/Parrot-1.0.4-<arch>.pkg`。用户数据目录为 `~/Library/Application Support/Parrot`，不会写入应用包。
 
 本机已有旧项目时，先运行 `.venv/bin/python scripts/setup-signing.py` 初始化一次签名身份。不要删除 `.data/signing/` 或将其中的密钥、密码提交到版本库。构建失败会保留原应用，不会自动降级为临时签名。
 

@@ -11,27 +11,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO = "Alver-Lin/Parrot"
-TAG = "v1.0.3"
-PKG = ROOT / "dist/release/Parrot-1.0.3-arm64.pkg"
-SHA = ROOT / "dist/release/Parrot-1.0.3-arm64.pkg.sha256"
+TAG = "v1.0.4"
+PKG = ROOT / "dist/release/Parrot-1.0.4-arm64.pkg"
+SHA = ROOT / "dist/release/Parrot-1.0.4-arm64.pkg.sha256"
 
-BODY = """## Parrot v1.0.3（macOS）
+BODY = """## Parrot v1.0.4（macOS）
 
 Apple Silicon（arm64）安装包。
 
 ### 更新内容
-- 本地识别由 Whisper 切换为 Qwen3-ASR（0.6B 速度优先 / 1.7B 准确优先）
-- 移除推理引擎切换与 Whisper 依赖；识别设置文案同步更新
-- 启动时注入系统代理，便于模型从 Hugging Face 下载
-- API Key 输入框与模型名称高度对齐
-- 更新 README demo 截图
+- 停止录入后可按设定分钟数自动释放识别模型，降低内存占用
+- 识别设置新增空闲释放时间选项（1–60 分钟）
+- 模型缓存检测更稳健：权重齐全但缺 README 等元数据时仍视为已下载
+- 识别参数改为 2×2 布局，设置页输入框尺寸统一
 
 ### 安装
-1. 下载下方 `Parrot-1.0.3-arm64.pkg`
+1. 下载下方 `Parrot-1.0.4-arm64.pkg`
 2. 双击安装到「应用程序」
 3. 从启动台打开 Parrot
 
-升级同一安装包时，会先退出并移除旧的 `/Applications/Parrot.app`，再写入新版本。个人数据保留在 `~/Library/Application Support/Parrot`。首次使用需重新下载 Qwen3-ASR 模型。
+升级同一安装包时，会先退出并移除旧的 `/Applications/Parrot.app`，再写入新版本。个人数据保留在 `~/Library/Application Support/Parrot`。
 
 ### 说明
 - 系统要求：macOS 13+ / Apple Silicon
@@ -41,7 +40,7 @@ Apple Silicon（arm64）安装包。
 引导下载页：仓库内 `docs/download.html`
 
 ### 校验
-见附件 `Parrot-1.0.3-arm64.pkg.sha256`
+见附件 `Parrot-1.0.4-arm64.pkg.sha256`
 """
 
 
@@ -87,7 +86,7 @@ def ensure_release(token: str) -> dict:
             data=json.dumps(
                 {
                     "tag_name": TAG,
-                    "name": "Parrot v1.0.3",
+                    "name": "Parrot v1.0.4",
                     "body": BODY,
                     "draft": False,
                     "prerelease": False,

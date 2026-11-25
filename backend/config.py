@@ -23,3 +23,5 @@ APPLE_SILICON = platform.system() == "Darwin" and platform.machine() == "arm64"
 CAPTURE_BINARY = Path(os.environ.get("PARROT_CAPTURE_BINARY", str(ROOT / "native" / "bin" / "ParrotCapture")))
 DESKTOP_TOKEN = os.environ.get("PARROT_DESKTOP_TOKEN", "")
 SAMPLE_RATE = 16000
+# After recording stops, keep the ASR model warm briefly, then free memory.
+MODEL_IDLE_RELEASE_SECONDS = 300
